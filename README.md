@@ -5,7 +5,8 @@ Salas de até 6 pessoas, sem cadastro, para conversar por voz, ligar a webcam e 
 ## Stack
 
 - **Front:** React + Vite + TypeScript (`client/`)
-- **Back:** Node + Fastify + TypeScript (`server/`) — API de salas; depois vai fazer a sinalização WebRTC por WebSocket
+- **Back:** Node + Fastify + TypeScript (`server/`) — API de salas e WebSocket de presença (depois, sinalização WebRTC)
+- **Protocolo compartilhado:** `shared/protocol.ts` (tipos das mensagens, limite de 6 pessoas)
 - **Testes:** Vitest + Testing Library
 
 ## Rodando localmente

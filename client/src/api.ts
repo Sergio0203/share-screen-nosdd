@@ -5,12 +5,15 @@ export async function createRoom(): Promise<string> {
   return body.id;
 }
 
-/** true se a sala existe, false se não existe. Lança em erro de rede. */
-export async function roomExists(id: string): Promise<boolean> {
+export type RoomInfo = { exists: false } | { exists: true; full: boolean };
+
+/** Consulta a sala. Lança em erro de rede. */
+export async function getRoom(id: string): Promise<RoomInfo> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(id)}`);
-  if (res.status === 404) return false;
+  if (res.status === 404) return { exists: false };
   if (!res.ok) throw new Error(`Falha ao abrir sala (${res.status})`);
-  return true;
+  const body = (await res.json()) as { full: boolean };
+  return { exists: true, full: body.full };
 }
 
 export function roomPath(id: string): string {

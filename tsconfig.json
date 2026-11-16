@@ -13,5 +13,5 @@
     "allowImportingTsExtensions": false,
     "types": ["node", "vite/client", "@testing-library/jest-dom"]
   },
-  "include": ["client/src", "server", "vite.config.ts"]
+  "include": ["client/src", "server", "shared", "vite.config.ts"]
 }
