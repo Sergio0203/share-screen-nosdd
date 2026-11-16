@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // Só recarrega quando o arquivo terminou de ser gravado. Sem isso, um
+    // arquivo pego no meio da gravação (vazio) fica em cache e quebra a página.
+    watch: { awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 } },
     proxy: { "/api": { target: "http://127.0.0.1:3000", ws: true } },
   },
   build: { outDir: "../dist/client", emptyOutDir: true },
