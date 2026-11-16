@@ -111,3 +111,20 @@ kbd { padding: 0 0.3em; border: 1px solid var(--border); border-radius: 4px; fon
 .participant-name { flex: 1; min-width: 0; }
 .mic-status { display: inline-flex; color: var(--muted); flex-shrink: 0; }
 .mic-status.is-on { color: var(--ok); }
+
+.tiles {
+  width: 100%; display: grid; gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+}
+.tile {
+  position: relative; margin: 0; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden;
+  background: #000; border: 1px solid var(--border);
+}
+.tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tile video.mirrored { transform: scaleX(-1); }
+.tile-name {
+  position: absolute; left: 0.5rem; bottom: 0.5rem; max-width: calc(100% - 1rem);
+  padding: 0.2rem 0.6rem; border-radius: 6px; background: rgb(0 0 0 / 0.6); color: #fff;
+  font-size: 0.9rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.device-status { display: inline-flex; gap: 0.35rem; flex-shrink: 0; }

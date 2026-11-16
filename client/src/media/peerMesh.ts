@@ -8,14 +8,28 @@ export const DEFAULT_RTC_CONFIG: RTCConfiguration = {
   iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }],
 };
 
+/**
+ * Canais de mídia de cada conexão, na ordem em que são negociados. A ordem é a
+ * mesma dos dois lados (é a ordem das linhas m= do SDP), então o índice do
+ * transceiver identifica o canal.
+ */
+export const SLOTS = [
+  { name: "audio", kind: "audio" },
+  { name: "camera", kind: "video" },
+] as const;
+export type Slot = (typeof SLOTS)[number]["name"];
+
+/** Limite de banda por canal enviado (bits/s). Cada pessoa envia até 5 cópias. */
+const MAX_BITRATE: Partial<Record<Slot, number>> = { camera: 500_000 };
+
 interface Peer {
   pc: RTCPeerConnection;
   /** Quem faz a oferta neste par. O outro lado só responde. */
   offerer: boolean;
   makingOffer: boolean;
   ignoreOffer: boolean;
-  /** Canal de áudio reservado (existe depois da primeira negociação). */
-  audio: RTCRtpTransceiver | null;
+  /** Canais reservados, por nome (existem depois da primeira negociação). */
+  transceivers: Partial<Record<Slot, RTCRtpTransceiver>>;
   /** Mensagens de sinalização processadas em ordem, uma de cada vez. */
   queue: Promise<void>;
 }
@@ -23,19 +37,18 @@ interface Peer {
 export interface PeerMeshOptions {
   selfId: string;
   sendSignal(to: string, data: SignalData): void;
-  /** Chamado quando chega (ou some, com null) o áudio de alguém. */
-  onRemoteStream(peerId: string, stream: MediaStream | null): void;
+  /** Chamado quando chega (ou some, com null) a mídia de alguém num canal. */
+  onRemoteTrack(peerId: string, slot: Slot, stream: MediaStream | null): void;
   rtcConfig?: RTCConfiguration;
 }
 
 /**
- * Uma conexão WebRTC direta com cada outra pessoa da sala (malha). Com até 6
- * pessoas, cada uma envia no máximo 5 cópias do próprio áudio — tranquilo.
+ * Uma conexão WebRTC direta com cada outra pessoa da sala (malha).
  *
  * Para evitar colisão de ofertas, em cada par só quem tem o menor id oferece.
- * A conexão é montada assim que os dois estão na sala, já com um canal de áudio
- * nos dois sentidos; ligar/desligar o microfone só troca a trilha
- * (replaceTrack), sem renegociar.
+ * A conexão é montada assim que os dois estão na sala, já com todos os canais
+ * (áudio, câmera) nos dois sentidos; ligar/desligar um dispositivo só troca a
+ * trilha (replaceTrack), sem renegociar.
  *
  * Por que não deixar os dois lados negociarem ("perfect negotiation")?
  * No Chromium, desfazer a própria oferta (rollback) durante a coleta de
@@ -44,8 +57,7 @@ export interface PeerMeshOptions {
  */
 export class PeerMesh {
   private peers = new Map<string, Peer>();
-  private localStream = new MediaStream();
-  private audioTrack: MediaStreamTrack | null = null;
+  private local: Record<Slot, MediaStreamTrack | null> = { audio: null, camera: null };
   private closed = false;
 
   constructor(private readonly opts: PeerMeshOptions) {}
@@ -62,12 +74,10 @@ export class PeerMesh {
     }
   }
 
-  /** Liga (track) ou desliga (null) o envio do microfone para todos. */
-  setAudioTrack(track: MediaStreamTrack | null): void {
-    if (this.audioTrack) this.localStream.removeTrack(this.audioTrack);
-    this.audioTrack = track;
-    if (track) this.localStream.addTrack(track);
-    for (const peer of this.peers.values()) this.applyAudio(peer);
+  /** Começa (track) ou para (null) de enviar num canal para todos. */
+  setTrack(slot: Slot, track: MediaStreamTrack | null): void {
+    this.local[slot] = track;
+    for (const peer of this.peers.values()) this.applyTrack(peer, slot);
   }
 
   handleSignal(from: string, data: SignalData): void {
@@ -87,8 +97,13 @@ export class PeerMesh {
     return this.opts.selfId < peerId;
   }
 
-  private applyAudio(peer: Peer): void {
-    peer.audio?.sender.replaceTrack(this.audioTrack).catch(() => {});
+  private applyTrack(peer: Peer, slot: Slot): void {
+    peer.transceivers[slot]?.sender.replaceTrack(this.local[slot]).catch(() => {});
+  }
+
+  private adopt(peer: Peer, slot: Slot, t: RTCRtpTransceiver): void {
+    peer.transceivers[slot] = t;
+    this.applyTrack(peer, slot);
   }
 
   private ensurePeer(id: string): Peer {
@@ -101,7 +116,7 @@ export class PeerMesh {
       offerer: this.isOfferer(id),
       makingOffer: false,
       ignoreOffer: false,
-      audio: null,
+      transceivers: {},
       queue: Promise.resolve(),
     };
     this.peers.set(id, peer);
@@ -122,18 +137,24 @@ export class PeerMesh {
     pc.onicecandidate = ({ candidate }) => {
       this.opts.sendSignal(id, { candidate: candidate ? candidate.toJSON() : null });
     };
-    pc.ontrack = ({ track, streams }) => {
-      if (track.kind !== "audio") return;
-      this.opts.onRemoteStream(id, streams[0] ?? new MediaStream([track]));
+    pc.ontrack = ({ track, transceiver }) => {
+      const slot = SLOTS[pc.getTransceivers().indexOf(transceiver)];
+      if (slot && slot.kind === track.kind) this.opts.onRemoteTrack(id, slot.name, new MediaStream([track]));
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "failed" && peer.offerer) pc.restartIce();
     };
 
     if (peer.offerer) {
-      // Reserva o canal de áudio já na primeira oferta (dispara a negociação).
-      peer.audio = pc.addTransceiver("audio", { direction: "sendrecv", streams: [this.localStream] });
-      this.applyAudio(peer);
+      // Reserva todos os canais já na primeira oferta (dispara a negociação).
+      for (const slot of SLOTS) {
+        const maxBitrate = MAX_BITRATE[slot.name];
+        const t = pc.addTransceiver(slot.kind, {
+          direction: "sendrecv",
+          sendEncodings: maxBitrate ? [{ maxBitrate }] : undefined,
+        });
+        this.adopt(peer, slot.name, t);
+      }
     }
     return peer;
   }
@@ -148,9 +169,15 @@ export class PeerMesh {
       if (peer.ignoreOffer) return;
       await pc.setRemoteDescription(description);
       if (description.type === "offer") {
-        this.adoptAudioTransceiver(peer);
+        const adopted = this.adoptRemoteTransceivers(peer);
         await pc.setLocalDescription();
         this.opts.sendSignal(from, { description: pc.localDescription?.toJSON() });
+        // Só depois da resposta o navegador tem os parâmetros de envio.
+        for (const slot of adopted) {
+          const maxBitrate = MAX_BITRATE[slot];
+          const t = peer.transceivers[slot];
+          if (maxBitrate && t) limitBitrate(t.sender, maxBitrate);
+        }
       }
     } else if (candidate !== undefined) {
       try {
@@ -161,15 +188,17 @@ export class PeerMesh {
     }
   }
 
-  /** Lado que responde: usa o canal de áudio criado pela oferta para enviar também. */
-  private adoptAudioTransceiver(peer: Peer): void {
-    if (peer.audio) return;
-    const t = peer.pc.getTransceivers().find((x) => x.receiver.track.kind === "audio");
-    if (!t) return;
-    t.direction = "sendrecv";
-    t.sender.setStreams?.(this.localStream);
-    peer.audio = t;
-    this.applyAudio(peer);
+  /** Lado que responde: usa os canais criados pela oferta para enviar também. */
+  private adoptRemoteTransceivers(peer: Peer): Slot[] {
+    const adopted: Slot[] = [];
+    peer.pc.getTransceivers().forEach((t, i) => {
+      const slot = SLOTS[i];
+      if (!slot || peer.transceivers[slot.name] || t.receiver.track.kind !== slot.kind) return;
+      t.direction = "sendrecv";
+      this.adopt(peer, slot.name, t);
+      adopted.push(slot.name);
+    });
+    return adopted;
   }
 
   private removePeer(id: string): void {
@@ -177,6 +206,17 @@ export class PeerMesh {
     if (!peer) return;
     peer.pc.close();
     this.peers.delete(id);
-    this.opts.onRemoteStream(id, null);
+    for (const slot of SLOTS) this.opts.onRemoteTrack(id, slot.name, null);
+  }
+}
+
+function limitBitrate(sender: RTCRtpSender, maxBitrate: number): void {
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings?.length) return;
+    params.encodings[0].maxBitrate = maxBitrate;
+    sender.setParameters(params).catch(() => {});
+  } catch {
+    // Navegador sem suporte: segue sem limite.
   }
 }

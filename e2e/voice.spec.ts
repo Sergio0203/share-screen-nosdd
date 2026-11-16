@@ -1,42 +1,10 @@
-import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import { createRoom, enter, FAKE_MEDIA, DENY_MEDIA, launch, newPage, statusIcons } from "./helpers";
 
 /**
- * Voz de ponta a ponta em Chromium real. O microfone falso do Chrome gera um
- * bipe contínuo; medimos se o som chega do outro lado com um AnalyserNode.
+ * Voz de ponta a ponta em Chromium real. O microfone falso do Chrome gera
+ * bipes; medimos se o som chega do outro lado com um AnalyserNode.
  */
-
-const FAKE_MIC = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"];
-
-let browsers: Browser[] = [];
-test.afterEach(async () => {
-  await Promise.all(browsers.map((b) => b.close()));
-  browsers = [];
-});
-
-async function newPage(args: string[]): Promise<Page> {
-  // Chromium completo (não o headless-shell, que não implementa permissões de mídia).
-  const browser = await chromium.launch({ channel: "chromium", args });
-  browsers.push(browser);
-  const page = await (await browser.newContext()).newPage();
-  // Qualquer erro de JS na página faz o teste falhar.
-  page.on("pageerror", (err) => {
-    throw err;
-  });
-  return page;
-}
-
-async function createRoom(page: Page): Promise<string> {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Criar sala" }).click();
-  await page.waitForURL(/\/sala\//);
-  return page.url();
-}
-
-async function enter(page: Page, name: string) {
-  await page.getByLabel("Seu nome").fill(name);
-  await page.getByRole("button", { name: "Entrar" }).click();
-  await expect(page.getByText("Você está na sala.")).toBeVisible();
-}
 
 /** Volume (RMS, 0–1) do áudio que está chegando de outras pessoas. */
 async function incomingLevel(page: Page): Promise<number> {
@@ -68,12 +36,11 @@ async function incomingLevel(page: Page): Promise<number> {
   });
 }
 
-const micStatus = (page: Page, name: string) =>
-  page.getByRole("complementary", { name: "Participantes" }).getByRole("listitem").filter({ hasText: name }).getByRole("img");
+const micStatus = (page: Page, name: string) => statusIcons(page, name).first();
 
 test("quem liga o microfone é ouvido pelos outros; todos veem o estado", async () => {
-  const ana = await newPage(FAKE_MIC);
-  const bia = await newPage(FAKE_MIC);
+  const ana = await newPage(FAKE_MEDIA);
+  const bia = await newPage(FAKE_MEDIA);
 
   const url = await createRoom(ana);
   await enter(ana, "Ana");
@@ -107,8 +74,8 @@ test("quem liga o microfone é ouvido pelos outros; todos veem o estado", async 
 });
 
 test("quem entra depois ouve quem já estava com o microfone ligado", async () => {
-  const ana = await newPage(FAKE_MIC);
-  const bia = await newPage(FAKE_MIC);
+  const ana = await newPage(FAKE_MEDIA);
+  const bia = await newPage(FAKE_MEDIA);
   const url = await createRoom(ana);
   await enter(ana, "Ana");
   await ana.getByRole("button", { name: "Ligar microfone" }).click();
@@ -121,9 +88,9 @@ test("quem entra depois ouve quem já estava com o microfone ligado", async () =
 });
 
 test("permissão negada mostra como liberar e a pessoa continua ouvindo a sala", async () => {
-  const ana = await newPage(FAKE_MIC);
+  const ana = await newPage(FAKE_MEDIA);
   // Como se a Bia clicasse em "Bloquear" no pedido de permissão.
-  const bia = await newPage(["--use-fake-device-for-media-stream", "--deny-permission-prompts"]);
+  const bia = await newPage(DENY_MEDIA);
 
   const url = await createRoom(ana);
   await enter(ana, "Ana");
@@ -170,16 +137,9 @@ async function audibleCount(page: Page): Promise<number> {
 
 test("6 pessoas ligando o microfone ao mesmo tempo: todas ouvem as outras 5", async () => {
   test.setTimeout(120_000);
-  const browser = await chromium.launch({ channel: "chromium", args: FAKE_MIC });
-  browsers.push(browser);
+  const browser = await launch(FAKE_MEDIA);
   const pages: Page[] = [];
-  for (let i = 0; i < 6; i++) {
-    const page = await (await browser.newContext()).newPage();
-    page.on("pageerror", (err) => {
-      throw err;
-    });
-    pages.push(page);
-  }
+  for (let i = 0; i < 6; i++) pages.push(await newPage(FAKE_MEDIA, browser));
 
   const url = await createRoom(pages[0]);
   await enter(pages[0], "P1");

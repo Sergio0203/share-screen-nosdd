@@ -3,10 +3,11 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { MAX_NAME_LENGTH, MAX_PARTICIPANTS, normalizeName, type Participant } from "../../../shared/protocol";
 import { getRoom, roomUrl } from "../api";
 import { copyText } from "../clipboard";
-import { MicIcon, MicOffIcon } from "../components/icons";
-import { MicErrorNotice } from "../components/MicErrorNotice";
+import { DeviceErrorNotice } from "../components/DeviceErrorNotice";
+import { CamIcon, CamOffIcon, MicIcon, MicOffIcon } from "../components/icons";
 import { RemoteAudio, unlockRemoteAudio } from "../components/RemoteAudio";
-import { useVoice } from "../media/useVoice";
+import { VideoTile } from "../components/VideoTile";
+import { useMedia, type Device, type DeviceState } from "../media/useMedia";
 import { joinRoom, type ConnectionEvent, type RoomConnection } from "../roomConnection";
 import type { JustCreatedState } from "./Home";
 
@@ -64,13 +65,13 @@ export function Room() {
   const url = roomUrl(id);
   const inRoom = phase.kind === "in_room" ? phase : null;
 
-  const voice = useVoice({
+  const media = useMedia({
     connection: inRoom ? activeConnection : null,
     selfId: inRoom?.selfId ?? null,
     participants: inRoom?.participants ?? [],
   });
-  const handleSignal = useRef(voice.handleSignal);
-  handleSignal.current = voice.handleSignal;
+  const handleSignal = useRef(media.handleSignal);
+  handleSignal.current = media.handleSignal;
   const onAudioBlocked = useCallback(() => setAudioBlocked(true), []);
 
   // Limpa o estado da navegação para não repetir o aviso ao recarregar.
@@ -227,7 +228,12 @@ export function Room() {
           para mandar para a galera.
         </p>
       )}
-      {voice.micError && <MicErrorNotice error={voice.micError} onDismiss={voice.dismissMicError} />}
+      {(["mic", "cam"] as const).map(
+        (d) =>
+          media.errors[d] && (
+            <DeviceErrorNotice key={d} device={d} error={media.errors[d]} onDismiss={() => media.dismissError(d)} />
+          ),
+      )}
       {audioBlocked && (
         <div className="notice notice-row" role="alert">
           <div>O navegador pausou o som dos outros participantes.</div>
@@ -280,20 +286,25 @@ export function Room() {
             </form>
           )}
 
-          {phase.kind === "in_room" && <p className="muted">Você está na sala.</p>}
-          {phase.kind === "in_room" && (
+          {inRoom && (() => {
+            const self = inRoom.participants.find((p) => p.id === inRoom.selfId);
+            const videos = inRoom.participants.filter(
+              (p) => p.id !== inRoom.selfId && p.camOn && media.remote[p.id]?.camera,
+            );
+            if (!media.localCamera && videos.length === 0) return <p className="muted">Você está na sala.</p>;
+            return (
+              <div className="tiles">
+                {media.localCamera && <VideoTile stream={media.localCamera} name={self?.name ?? name} self />}
+                {videos.map((p) => (
+                  <VideoTile key={p.id} stream={media.remote[p.id]!.camera!} name={p.name} />
+                ))}
+              </div>
+            );
+          })()}
+          {inRoom && (
             <div className="controls">
-              <button
-                className={`btn btn-control ${voice.mic === "on" ? "is-on" : ""}`}
-                onClick={voice.toggleMic}
-                disabled={voice.mic === "starting"}
-                aria-pressed={voice.mic === "on"}
-              >
-                {voice.mic === "on" ? <MicIcon /> : <MicOffIcon />}
-                <span>
-                  {voice.mic === "on" ? "Desligar microfone" : voice.mic === "starting" ? "Ligando…" : "Ligar microfone"}
-                </span>
-              </button>
+              <DeviceButton device="mic" state={media.mic} onClick={() => media.toggle("mic")} />
+              <DeviceButton device="cam" state={media.cam} onClick={() => media.toggle("cam")} />
             </div>
           )}
 
@@ -326,13 +337,23 @@ export function Room() {
                     {p.name}
                     {p.id === phase.selfId && <span className="muted"> (você)</span>}
                   </span>
-                  <span
-                    className={`mic-status ${p.micOn ? "is-on" : ""}`}
-                    role="img"
-                    aria-label={p.micOn ? "microfone ligado" : "microfone desligado"}
-                    title={p.micOn ? "Microfone ligado" : "Microfone desligado"}
-                  >
-                    {p.micOn ? <MicIcon size={16} /> : <MicOffIcon size={16} />}
+                  <span className="device-status">
+                    <span
+                      className={`mic-status ${p.micOn ? "is-on" : ""}`}
+                      role="img"
+                      aria-label={p.micOn ? "microfone ligado" : "microfone desligado"}
+                      title={p.micOn ? "Microfone ligado" : "Microfone desligado"}
+                    >
+                      {p.micOn ? <MicIcon size={16} /> : <MicOffIcon size={16} />}
+                    </span>
+                    <span
+                      className={`mic-status ${p.camOn ? "is-on" : ""}`}
+                      role="img"
+                      aria-label={p.camOn ? "câmera ligada" : "câmera desligada"}
+                      title={p.camOn ? "Câmera ligada" : "Câmera desligada"}
+                    >
+                      {p.camOn ? <CamIcon size={16} /> : <CamOffIcon size={16} />}
+                    </span>
                   </span>
                 </li>
               ))}
@@ -341,9 +362,9 @@ export function Room() {
         )}
       </div>
 
-      {Object.entries(voice.remoteStreams).map(([peerId, stream]) => (
-        <RemoteAudio key={peerId} stream={stream} onBlocked={onAudioBlocked} />
-      ))}
+      {Object.entries(media.remote).map(
+        ([peerId, m]) => m.audio && <RemoteAudio key={peerId} stream={m.audio} onBlocked={onAudioBlocked} />,
+      )}
 
       {copyState === "copied" && (
         <div className="toast" role="status">
@@ -351,5 +372,27 @@ export function Room() {
         </div>
       )}
     </div>
+  );
+}
+
+const BUTTON_TEXT: Record<Device, { on: string; off: string }> = {
+  mic: { on: "Desligar microfone", off: "Ligar microfone" },
+  cam: { on: "Desligar câmera", off: "Ligar câmera" },
+};
+
+function DeviceButton({ device, state, onClick }: { device: Device; state: DeviceState; onClick(): void }) {
+  const on = state === "on";
+  const Icon = device === "mic" ? (on ? MicIcon : MicOffIcon) : on ? CamIcon : CamOffIcon;
+  return (
+    <button
+      className={`btn btn-control ${on ? "is-on" : ""}`}
+      onClick={onClick}
+      disabled={state === "starting"}
+      aria-pressed={on}
+      aria-label={on ? BUTTON_TEXT[device].on : BUTTON_TEXT[device].off}
+    >
+      <Icon />
+      <span aria-hidden>{on ? BUTTON_TEXT[device].on : state === "starting" ? "Ligando…" : BUTTON_TEXT[device].off}</span>
+    </button>
   );
 }

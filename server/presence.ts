@@ -84,8 +84,8 @@ export function registerPresence(app: FastifyInstance, store: RoomStore, opts: P
       // Daqui para baixo, só quem já entrou na sala.
       if (!participantId) return fail(socket, "bad_message");
 
-      if (msg.type === "mic") {
-        store.setMic(roomId, participantId, msg.on === true);
+      if (msg.type === "mic" || msg.type === "cam") {
+        store.setDevice(roomId, participantId, msg.type === "mic" ? "micOn" : "camOn", msg.on === true);
         broadcast(roomId);
         return;
       }

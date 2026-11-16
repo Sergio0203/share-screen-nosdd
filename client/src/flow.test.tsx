@@ -67,13 +67,16 @@ class FakeMediaStream {
   getAudioTracks() {
     return this.tracks;
   }
+  getTracks() {
+    return this.tracks;
+  }
 }
 interface FakeTransceiver {
   direction: string;
   sender: { track: unknown; replaceTrack: (t: unknown) => Promise<void>; setStreams: () => void };
   receiver: { track: { kind: string } };
 }
-function fakeTransceiver(direction: string): FakeTransceiver {
+function fakeTransceiver(direction: string, kind = "audio"): FakeTransceiver {
   const sender = {
     track: null as unknown,
     replaceTrack: async (t: unknown) => {
@@ -81,7 +84,7 @@ function fakeTransceiver(direction: string): FakeTransceiver {
     },
     setStreams: () => {},
   };
-  return { direction, sender, receiver: { track: { kind: "audio" } } };
+  return { direction, sender, receiver: { track: { kind } } };
 }
 class FakePeerConnection {
   static instances: FakePeerConnection[] = [];
@@ -92,13 +95,13 @@ class FakePeerConnection {
   closed = false;
   onnegotiationneeded: (() => void) | null = null;
   onicecandidate = null;
-  ontrack: ((e: { track: { kind: string }; streams: unknown[] }) => void) | null = null;
+  ontrack: ((e: { track: { kind: string }; transceiver: FakeTransceiver }) => void) | null = null;
   onconnectionstatechange = null;
   constructor() {
     FakePeerConnection.instances.push(this);
   }
-  addTransceiver(_kind: string, init: { direction: string }) {
-    const t = fakeTransceiver(init.direction);
+  addTransceiver(kind: string, init: { direction: string }) {
+    const t = fakeTransceiver(init.direction, kind);
     this.transceivers.push(t);
     return t;
   }
@@ -108,7 +111,9 @@ class FakePeerConnection {
   async setLocalDescription() {}
   async setRemoteDescription(d: { type: string }) {
     // Uma oferta remota cria o canal de áudio do lado que responde.
-    if (d.type === "offer" && this.transceivers.length === 0) this.transceivers.push(fakeTransceiver("recvonly"));
+    if (d.type === "offer" && this.transceivers.length === 0) {
+      this.transceivers.push(fakeTransceiver("recvonly", "audio"), fakeTransceiver("recvonly", "video"));
+    }
   }
   async addIceCandidate() {}
   restartIce() {}
@@ -127,7 +132,7 @@ function fakeMicTrack() {
   return t;
 }
 
-function mockGetUserMedia(impl: () => Promise<unknown>) {
+function mockGetUserMedia(impl: (c?: MediaStreamConstraints) => Promise<unknown>) {
   const getUserMedia = vi.fn(impl);
   Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia }, configurable: true });
   return getUserMedia;
@@ -146,7 +151,7 @@ function renderAt(path: string) {
 }
 
 const people = (...names: string[]): Participant[] =>
-  names.map((name, i) => ({ id: `id-${i}`, name, micOn: false }));
+  names.map((name, i) => ({ id: `id-${i}`, name, micOn: false, camOn: false }));
 
 async function enterAs(name: string) {
   const input = await screen.findByLabelText("Seu nome");
@@ -280,7 +285,7 @@ describe("Entrar na sala pelo link", () => {
     ws.serverSends({ type: "participants", participants: people("Ana", "Bia", "Caio") });
     expect(within(list).getByText("Caio")).toBeInTheDocument();
 
-    ws.serverSends({ type: "participants", participants: [{ id: "id-1", name: "Bia", micOn: false }] });
+    ws.serverSends({ type: "participants", participants: [{ id: "id-1", name: "Bia", micOn: false, camOn: false }] });
     expect(within(list).queryByText("Ana")).not.toBeInTheDocument();
     expect(list).toHaveTextContent("(1/6)");
   });
@@ -333,7 +338,7 @@ describe("Conversar por voz", () => {
     ws.serverSends({
       type: "joined",
       selfId: "me",
-      participants: [{ id: "me", name: "Ana", micOn: false }, ...others],
+      participants: [{ id: "me", name: "Ana", micOn: false, camOn: false }, ...others],
     });
     await screen.findByText("Você está na sala.");
     return ws;
@@ -354,10 +359,12 @@ describe("Conversar por voz", () => {
     const track = fakeMicTrack();
     mockGetUserMedia(async () => new FakeMediaStream([track]));
     // "me" < "zoe": eu sou quem oferece, a conexão nasce assim que ela aparece.
-    const ws = await inRoomWith({ id: "zoe", name: "Zoe", micOn: false });
+    const ws = await inRoomWith({ id: "zoe", name: "Zoe", micOn: false, camOn: false });
     expect(FakePeerConnection.instances).toHaveLength(1);
-    const audio = FakePeerConnection.instances[0].transceivers[0];
+    const [audio, camera] = FakePeerConnection.instances[0].transceivers;
     expect(audio.direction).toBe("sendrecv");
+    expect(camera.receiver.track.kind).toBe("video");
+    expect(camera.direction).toBe("sendrecv");
     expect(audio.sender.track).toBeNull();
 
     await userEvent.click(micButton());
@@ -375,7 +382,7 @@ describe("Conversar por voz", () => {
 
   it("todos veem quem está com o microfone ligado ou desligado", async () => {
     mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
-    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true }, { id: "caio", name: "Caio", micOn: false });
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true, camOn: false }, { id: "caio", name: "Caio", micOn: false, camOn: false });
     const list = screen.getByRole("complementary", { name: "Participantes" });
     const row = (name: string) => within(list).getByText(name).closest("li")!;
 
@@ -385,9 +392,9 @@ describe("Conversar por voz", () => {
     ws.serverSends({
       type: "participants",
       participants: [
-        { id: "me", name: "Ana", micOn: false },
-        { id: "bia", name: "Bia", micOn: false },
-        { id: "caio", name: "Caio", micOn: true },
+        { id: "me", name: "Ana", micOn: false, camOn: false },
+        { id: "bia", name: "Bia", micOn: false, camOn: false },
+        { id: "caio", name: "Caio", micOn: true, camOn: false },
       ],
     });
     expect(within(row("Bia")).getByRole("img", { name: "microfone desligado" })).toBeInTheDocument();
@@ -412,8 +419,8 @@ describe("Conversar por voz", () => {
     ws.serverSends({
       type: "participants",
       participants: [
-        { id: "me", name: "Ana", micOn: false },
-        { id: "bia", name: "Bia", micOn: true },
+        { id: "me", name: "Ana", micOn: false, camOn: false },
+        { id: "bia", name: "Bia", micOn: true, camOn: false },
       ],
     });
     expect(screen.getByText("Bia")).toBeInTheDocument();
@@ -432,7 +439,7 @@ describe("Conversar por voz", () => {
   it("toca o áudio que chega de outra pessoa e para quando ela sai", async () => {
     mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
     HTMLMediaElement.prototype.play = vi.fn(async () => {});
-    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true });
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true, camOn: false });
 
     // "bia" < "me": a Bia oferece; a conexão só nasce quando a oferta chega.
     expect(FakePeerConnection.instances).toHaveLength(0);
@@ -440,14 +447,122 @@ describe("Conversar por voz", () => {
     await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
     // Quem responde também passa a enviar pelo mesmo canal.
     await vi.waitFor(() => expect(FakePeerConnection.instances[0].transceivers[0].direction).toBe("sendrecv"));
-    const remote = new FakeMediaStream([{ kind: "audio" }]);
-    act(() => FakePeerConnection.instances[0].ontrack!({ track: { kind: "audio" }, streams: [remote] }));
+    const pc = FakePeerConnection.instances[0];
+    const remoteTrack = { kind: "audio" };
+    act(() => pc.ontrack!({ track: remoteTrack, transceiver: pc.transceivers[0] }));
     const audio = document.querySelector("audio[data-remote-audio]") as HTMLAudioElement;
     expect(audio).not.toBeNull();
-    expect(audio.srcObject).toBe(remote);
+    expect((audio.srcObject as unknown as FakeMediaStream).tracks).toEqual([remoteTrack]);
 
-    ws.serverSends({ type: "participants", participants: [{ id: "me", name: "Ana", micOn: false }] });
+    ws.serverSends({ type: "participants", participants: [{ id: "me", name: "Ana", micOn: false, camOn: false }] });
     expect(document.querySelector("audio[data-remote-audio]")).toBeNull();
     expect(FakePeerConnection.instances[0].closed).toBe(true);
+  });
+});
+
+describe("Ativar a webcam", () => {
+  beforeEach(() => {
+    mockClipboard({});
+    HTMLMediaElement.prototype.play = vi.fn(async () => {});
+  });
+
+  async function inRoomWith(...others: Participant[]) {
+    renderAt(`/sala/${ROOM_ID}`);
+    await enterAs("Ana");
+    const ws = lastSocket();
+    ws.serverSends({
+      type: "joined",
+      selfId: "me",
+      participants: [{ id: "me", name: "Ana", micOn: false, camOn: false }, ...others],
+    });
+    await screen.findByText("Você está na sala.");
+    return ws;
+  }
+  const camButton = () => screen.getByRole("button", { name: /câmera/ });
+
+  it("entra com a câmera desligada, sem pedir permissão", async () => {
+    const getUserMedia = mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
+    await inRoomWith();
+    expect(camButton()).toHaveAccessibleName("Ligar câmera");
+    expect(camButton()).toHaveAttribute("aria-pressed", "false");
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(screen.queryByRole("figure")).not.toBeInTheDocument();
+  });
+
+  it("o botão liga e desliga a câmera, mostra o próprio vídeo e avisa o servidor", async () => {
+    const track = Object.assign(fakeMicTrack(), { kind: "video" });
+    const getUserMedia = mockGetUserMedia(async () => new FakeMediaStream([track]));
+    const ws = await inRoomWith({ id: "zoe", name: "Zoe", micOn: false, camOn: false });
+    const camera = FakePeerConnection.instances[0].transceivers[1];
+
+    await userEvent.click(camButton());
+    expect(getUserMedia).toHaveBeenCalledWith(expect.objectContaining({ video: expect.anything() }));
+    expect(await screen.findByRole("button", { name: "Desligar câmera" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("figure", { name: "Sua câmera" })).toHaveTextContent("Ana (você)");
+    expect(ws.sent).toContainEqual({ type: "cam", on: true });
+    await vi.waitFor(() => expect(camera.sender.track).toBe(track));
+    // O microfone não foi mexido.
+    expect(FakePeerConnection.instances[0].transceivers[0].sender.track).toBeNull();
+
+    await userEvent.click(camButton());
+    expect(camButton()).toHaveAccessibleName("Ligar câmera");
+    expect(ws.sent.at(-1)).toEqual({ type: "cam", on: false });
+    expect(track.stopped).toBe(true);
+    expect(screen.queryByRole("figure")).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(camera.sender.track).toBeNull());
+  });
+
+  it("todos veem o vídeo de quem ligou a câmera, com o nome; some quando ela desliga", async () => {
+    mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: false, camOn: false });
+    ws.serverSends({ type: "signal", from: "bia", data: { description: { type: "offer", sdp: "x" } } });
+    await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
+    const pc = FakePeerConnection.instances[0];
+    act(() => pc.ontrack!({ track: { kind: "video" }, transceiver: pc.transceivers[1] }));
+
+    // Trilha existe, mas a Bia ainda não ligou a câmera: nada de vídeo.
+    expect(screen.queryByRole("figure")).not.toBeInTheDocument();
+
+    const bia = (camOn: boolean): Participant[] => [
+      { id: "me", name: "Ana", micOn: false, camOn: false },
+      { id: "bia", name: "Bia", micOn: false, camOn },
+    ];
+    ws.serverSends({ type: "participants", participants: bia(true) });
+    const tile = screen.getByRole("figure", { name: "Câmera de Bia" });
+    expect(tile).toHaveTextContent("Bia");
+    expect(within(screen.getByRole("complementary")).getByRole("img", { name: "câmera ligada" })).toBeInTheDocument();
+
+    ws.serverSends({ type: "participants", participants: bia(false) });
+    expect(screen.queryByRole("figure", { name: "Câmera de Bia" })).not.toBeInTheDocument();
+  });
+
+  it("permissão negada explica como liberar e o resto da sala continua funcionando", async () => {
+    const getUserMedia = mockGetUserMedia(async (c?: MediaStreamConstraints) => {
+      if (c?.video) throw new DOMException("Permission denied", "NotAllowedError");
+      return new FakeMediaStream([fakeMicTrack()]);
+    });
+    const ws = await inRoomWith();
+
+    await userEvent.click(camButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("O navegador bloqueou a câmera.");
+    expect(alert).toHaveTextContent(/cadeado/);
+    expect(alert).toHaveTextContent(/Câmera para Permitir/);
+    expect(camButton()).toHaveAccessibleName("Ligar câmera");
+    expect(ws.sent).not.toContainEqual({ type: "cam", on: true });
+
+    // O microfone continua funcionando.
+    await userEvent.click(screen.getByRole("button", { name: "Ligar microfone" }));
+    expect(await screen.findByRole("button", { name: "Desligar microfone" })).toBeInTheDocument();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it("câmera em uso por outro programa mostra outra mensagem", async () => {
+    mockGetUserMedia(async () => {
+      throw new DOMException("busy", "NotReadableError");
+    });
+    await inRoomWith();
+    await userEvent.click(camButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não deu para usar a câmera.");
   });
 });

@@ -7,6 +7,7 @@ export interface Participant {
   id: string;
   name: string;
   micOn: boolean;
+  camOn: boolean;
 }
 
 /**
@@ -21,6 +22,7 @@ export interface SignalData {
 export type ClientMessage =
   | { type: "join"; name: string }
   | { type: "mic"; on: boolean }
+  | { type: "cam"; on: boolean }
   | { type: "signal"; to: string; data: SignalData };
 
 export type ErrorCode = "room_not_found" | "room_full" | "invalid_name" | "bad_message";
