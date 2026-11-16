@@ -60,6 +60,8 @@ test("quem liga o microfone é ouvido pelos outros; todos veem o estado", async 
 
   // Bia também liga: os dois se ouvem.
   await bia.getByRole("button", { name: "Ligar microfone" }).click();
+  // Os 3 s contam a partir do microfone ligado (o getUserMedia pode demorar com muitos navegadores abertos).
+  await expect(bia.getByRole("button", { name: "Desligar microfone" })).toBeVisible();
   await expect(micStatus(ana, "Bia")).toHaveAccessibleName("microfone ligado", { timeout: 3000 });
   await expect.poll(() => incomingLevel(ana), { timeout: 10_000 }).toBeGreaterThan(0.01);
 

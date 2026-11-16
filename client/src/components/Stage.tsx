@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Participant } from "../../../shared/protocol";
-import type { RemoteMedia } from "../media/useMedia";
+import { SCREEN_QUALITIES, type ScreenQuality } from "../media/screenQuality";
+import type { CaptureInfo, RemoteMedia } from "../media/useMedia";
 import { ScreenView } from "./ScreenView";
 import { VideoTile } from "./VideoTile";
 
@@ -11,13 +12,15 @@ interface Props {
   remote: RemoteMedia;
   localCamera: MediaStream | null;
   localScreen: MediaStream | null;
+  screenQuality: ScreenQuality;
+  screenCapture: CaptureInfo | null;
 }
 
 /**
  * Área central da sala: compartilhamento de tela em destaque (se houver) e,
  * abaixo, as câmeras.
  */
-export function Stage({ selfId, selfName, participants, remote, localCamera, localScreen }: Props) {
+export function Stage({ selfId, selfName, participants, remote, localCamera, localScreen, screenQuality, screenCapture }: Props) {
   const [chosen, setChosen] = useState<string | null>(null);
 
   const others = participants.filter((p) => p.id !== selfId);
@@ -47,9 +50,19 @@ export function Stage({ selfId, selfName, participants, remote, localCamera, loc
       )}
 
       {localScreen && (
-        <p className="sharing-banner" role="status">
-          Você está compartilhando a tela.
-        </p>
+        <div className="sharing-banner" role="status">
+          <p>Você está compartilhando a tela.</p>
+          <p className="sharing-quality">
+            Qualidade ativa: <strong>{SCREEN_QUALITIES[screenQuality].label}</strong>
+            {screenCapture && (
+              <span className="muted">
+                {" "}
+                · capturando {screenCapture.width}×{screenCapture.height} a {screenCapture.frameRate} fps
+                {screenCapture.height < SCREEN_QUALITIES[screenQuality].height && " (a janela é menor que a qualidade escolhida)"}
+              </span>
+            )}
+          </p>
+        </div>
       )}
 
       <div className={`tiles ${spotlight ? "tiles-small" : ""}`}>

@@ -2,6 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Participant, SignalData } from "../../../shared/protocol";
 import type { RoomConnection } from "../roomConnection";
 import { PeerMesh, type Slot } from "./peerMesh";
+import {
+  captureConstraints,
+  DEFAULT_SCREEN_QUALITY,
+  isScreenQuality,
+  sendParams,
+  type ScreenQuality,
+} from "./screenQuality";
 
 export type Device = "mic" | "cam" | "screen";
 export const ALL_DEVICES: Device[] = ["mic", "cam", "screen"];
@@ -20,7 +27,7 @@ export type DeviceError =
 interface DeviceConfig {
   slot: Slot;
   supported(): boolean;
-  acquire(): Promise<MediaStream>;
+  acquire(screenQuality: ScreenQuality): Promise<MediaStream>;
 }
 
 const DEVICES: Record<Device, DeviceConfig> = {
@@ -44,10 +51,10 @@ const DEVICES: Record<Device, DeviceConfig> = {
   screen: {
     slot: "screen",
     supported: () => !!navigator.mediaDevices?.getDisplayMedia,
-    acquire: async () => {
+    acquire: async (quality) => {
       // O seletor do navegador oferece tela inteira, janela de um app ou aba.
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { ideal: 30, max: 30 } },
+        video: captureConstraints(quality),
         audio: false,
         // Não oferecer a própria aba do Telão (efeito espelho infinito).
         selfBrowserSurface: "exclude",
@@ -72,6 +79,31 @@ function classify(err: unknown): DeviceError {
   return "other";
 }
 
+const QUALITY_KEY = "telao:screenQuality";
+
+function loadQuality(): ScreenQuality {
+  try {
+    const saved = localStorage.getItem(QUALITY_KEY);
+    return isScreenQuality(saved) ? saved : DEFAULT_SCREEN_QUALITY;
+  } catch {
+    return DEFAULT_SCREEN_QUALITY;
+  }
+}
+
+/** O que a captura de tela está entregando de fato. */
+export interface CaptureInfo {
+  width: number;
+  height: number;
+  frameRate: number;
+}
+
+function captureInfo(track: MediaStreamTrack | null): CaptureInfo | null {
+  if (!track?.getSettings) return null;
+  const { width, height, frameRate } = track.getSettings();
+  if (!width || !height) return null;
+  return { width, height, frameRate: Math.round(frameRate ?? 0) };
+}
+
 /** Mídia que chega de cada pessoa, por canal. */
 export type RemoteMedia = Record<string, Partial<Record<Slot, MediaStream>>>;
 
@@ -90,6 +122,10 @@ export function useMedia({ connection, selfId, participants }: Options) {
   const [errors, setErrors] = useState<Record<Device, DeviceError | null>>({ mic: null, cam: null, screen: null });
   const [remote, setRemote] = useState<RemoteMedia>({});
   const [local, setLocal] = useState<Record<Device, MediaStream | null>>({ mic: null, cam: null, screen: null });
+  const [screenQuality, setScreenQualityState] = useState<ScreenQuality>(loadQuality);
+  const screenQualityRef = useRef(screenQuality);
+  const [screenCapture, setScreenCapture] = useState<CaptureInfo | null>(null);
+  const [qualityError, setQualityError] = useState(false);
   const mesh = useRef<PeerMesh | null>(null);
   const tracks = useRef<Record<Device, MediaStreamTrack | null>>({ mic: null, cam: null, screen: null });
   /** Sinalização que chegou antes da malha existir (logo após entrar). */
@@ -150,6 +186,7 @@ export function useMedia({ connection, selfId, participants }: Options) {
       mesh.current?.setTrack(DEVICES[device].slot, null);
       connection?.send({ type: device, on: false });
       setLocal((l) => ({ ...l, [device]: null }));
+      if (device === "screen") setScreenCapture(null);
       setDevice(device, "off");
     },
     [connection],
@@ -163,7 +200,8 @@ export function useMedia({ connection, selfId, participants }: Options) {
       }
       setDevice(device, "starting");
       try {
-        const stream = await DEVICES[device].acquire();
+        const quality = screenQualityRef.current;
+        const stream = await DEVICES[device].acquire(quality);
         const track = stream.getTracks()[0];
         if (!mesh.current) {
           track.stop(); // saiu da sala enquanto esperava a permissão
@@ -173,6 +211,10 @@ export function useMedia({ connection, selfId, participants }: Options) {
         // Dispositivo desconectado, permissão revogada ou — na tela — o botão
         // nativo "Parar compartilhamento" do navegador.
         track.addEventListener("ended", () => tracks.current[device] === track && turnOff(device));
+        if (device === "screen") {
+          await mesh.current.setSendParams("screen", sendParams(quality));
+          setScreenCapture(captureInfo(track));
+        }
         mesh.current.setTrack(DEVICES[device].slot, track);
         connection?.send({ type: device, on: true });
         setLocal((l) => ({ ...l, [device]: stream }));
@@ -194,7 +236,45 @@ export function useMedia({ connection, selfId, participants }: Options) {
     [state, turnOn, turnOff],
   );
 
+  /**
+   * Troca a qualidade da tela. Se estiver compartilhando, muda a captura e o
+   * envio na hora, sem parar.
+   */
+  const setScreenQuality = useCallback(async (quality: ScreenQuality) => {
+    const previous = screenQualityRef.current;
+    screenQualityRef.current = quality;
+    setScreenQualityState(quality);
+    setQualityError(false);
+    try {
+      localStorage.setItem(QUALITY_KEY, quality);
+    } catch {
+      // Sem storage: só não lembra a escolha.
+    }
+    const track = tracks.current.screen;
+    if (!track) return;
+    try {
+      await track.applyConstraints(captureConstraints(quality));
+      await mesh.current?.setSendParams("screen", sendParams(quality));
+      setScreenCapture(captureInfo(track));
+    } catch {
+      screenQualityRef.current = previous;
+      setScreenQualityState(previous);
+      setQualityError(true);
+    }
+  }, []);
+
+  // A janela compartilhada pode mudar de tamanho: atualiza o que é mostrado.
+  useEffect(() => {
+    if (state.screen !== "on") return;
+    const timer = setInterval(() => setScreenCapture(captureInfo(tracks.current.screen)), 2000);
+    return () => clearInterval(timer);
+  }, [state.screen]);
+
   return {
+    screenQuality,
+    setScreenQuality,
+    screenCapture,
+    qualityError,
     state,
     errors,
     dismissError: (device: Device) => setError(device, null),

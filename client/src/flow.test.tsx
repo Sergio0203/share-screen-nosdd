@@ -146,7 +146,7 @@ function mockGetUserMedia(impl: (c?: MediaStreamConstraints) => Promise<unknown>
 }
 
 /** getDisplayMedia falso (ou ausente, com null, como no celular). */
-function mockGetDisplayMedia(impl: (() => Promise<unknown>) | null) {
+function mockGetDisplayMedia(impl: ((opts?: DisplayMediaStreamOptions) => Promise<unknown>) | null) {
   const getDisplayMedia = impl ? vi.fn(impl) : undefined;
   const getUserMedia = vi.fn(async () => new FakeMediaStream([fakeMicTrack()]));
   Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia, getDisplayMedia }, configurable: true });
@@ -599,7 +599,25 @@ describe("Compartilhar a tela", () => {
     return ws;
   }
   const shareButton = () => screen.getByRole("button", { name: /Compartilhar tela|Parar compartilhamento/ });
-  const screenTrack = () => Object.assign(fakeMicTrack(), { kind: "video", contentHint: "" });
+  /** Trilha de tela falsa que obedece applyConstraints (como o Chrome faz). */
+  const screenTrack = (source = { width: 1920, height: 1080, frameRate: 60 }) => {
+    let settings = { width: 1280, height: 720, frameRate: 30 };
+    const fit = (c: MediaTrackConstraints) => {
+      const max = (v: unknown, fallback: number) => (v as { max?: number })?.max ?? fallback;
+      settings = {
+        width: Math.min(source.width, max(c.width, source.width)),
+        height: Math.min(source.height, max(c.height, source.height)),
+        frameRate: Math.min(source.frameRate, max(c.frameRate, source.frameRate)),
+      };
+    };
+    return Object.assign(fakeMicTrack(), {
+      kind: "video",
+      contentHint: "",
+      fit,
+      getSettings: () => settings,
+      applyConstraints: vi.fn(async (c: MediaTrackConstraints) => fit(c)),
+    });
+  };
 
   it("o botão compartilha a tela, avisa o servidor e mostra que está compartilhando", async () => {
     const track = screenTrack();
@@ -730,5 +748,139 @@ describe("Compartilhar a tela", () => {
     expect(alert).toHaveTextContent("Este navegador não permite compartilhar a tela.");
     expect(alert).toHaveTextContent(/computador/);
     expect(shareButton()).toHaveAccessibleName("Compartilhar tela");
+  });
+});
+
+describe("Escolher a qualidade do compartilhamento", () => {
+  beforeEach(() => {
+    mockClipboard({});
+    HTMLMediaElement.prototype.play = vi.fn(async () => {});
+  });
+
+  const ana = { id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false };
+  const zoe = { id: "zoe", name: "Zoe", micOn: false, camOn: false, screenOn: false };
+
+  async function inRoom() {
+    renderAt(`/sala/${ROOM_ID}`);
+    await enterAs("Ana");
+    const ws = lastSocket();
+    ws.serverSends({ type: "joined", selfId: "me", participants: [ana, zoe] });
+    await screen.findByText("Você está na sala.");
+    return ws;
+  }
+
+  function fakeScreenTrack() {
+    let settings = { width: 0, height: 0, frameRate: 0 };
+    const fit = (c?: MediaTrackConstraints) => {
+      const max = (v: unknown) => (v as { max: number }).max;
+      settings = { width: max(c?.width), height: max(c?.height), frameRate: max(c?.frameRate) };
+    };
+    return Object.assign(fakeMicTrack(), {
+      kind: "video",
+      contentHint: "",
+      fit,
+      getSettings: () => settings,
+      applyConstraints: vi.fn(async (c: MediaTrackConstraints) => fit(c)),
+    });
+  }
+
+  /** Sender falso com getParameters/setParameters, para conferir banda e fps enviados. */
+  function trackSendParams() {
+    const sent: RTCRtpEncodingParameters[] = [];
+    for (const pc of FakePeerConnection.instances) {
+      const sender = pc.transceivers[2].sender as unknown as {
+        getParameters(): RTCRtpSendParameters;
+        setParameters(p: RTCRtpSendParameters): Promise<void>;
+      };
+      sender.getParameters = () => ({ encodings: [{}] }) as RTCRtpSendParameters;
+      sender.setParameters = async (p) => {
+        sent.push(p.encodings[0]);
+      };
+    }
+    return sent;
+  }
+
+  const picker = () => screen.getByRole("combobox", { name: "Qualidade do compartilhamento" });
+
+  it("oferece 720p 30 fps, 1080p 30 fps e 1080p 60 fps antes de compartilhar", async () => {
+    mockGetDisplayMedia(async () => new FakeMediaStream([fakeScreenTrack()]));
+    await inRoom();
+    const options = within(picker()).getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["720p 30 fps", "1080p 30 fps", "1080p 60 fps"]);
+    expect(picker()).toHaveValue("720p30");
+  });
+
+  it("a qualidade escolhida antes é usada ao compartilhar, e a interface mostra qual está ativa", async () => {
+    const track = fakeScreenTrack();
+    const getDisplayMedia = mockGetDisplayMedia(async (opts) => {
+      track.fit(opts?.video as MediaTrackConstraints);
+      return new FakeMediaStream([track]);
+    })!;
+    await inRoom();
+    const sent = trackSendParams();
+
+    await userEvent.selectOptions(picker(), "1080p 60 fps");
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+
+    const video = (getDisplayMedia.mock.calls[0][0] as DisplayMediaStreamOptions).video as MediaTrackConstraints;
+    expect(video).toMatchObject({ width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 60 } });
+    const status = await screen.findByText(/Qualidade ativa/);
+    expect(status).toHaveTextContent("Qualidade ativa: 1080p 60 fps · capturando 1920×1080 a 60 fps");
+    await vi.waitFor(() => expect(sent.at(-1)).toMatchObject({ maxFramerate: 60, maxBitrate: 4_000_000 }));
+  });
+
+  it("troca a qualidade durante o compartilhamento, sem parar e recomeçar", async () => {
+    const track = fakeScreenTrack();
+    const getDisplayMedia = mockGetDisplayMedia(async (opts) => {
+      track.fit(opts?.video as MediaTrackConstraints);
+      return new FakeMediaStream([track]);
+    })!;
+    const ws = await inRoom();
+    const sent = trackSendParams();
+    const screenSlot = FakePeerConnection.instances[0].transceivers[2];
+
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    expect(await screen.findByText(/Qualidade ativa/)).toHaveTextContent("720p 30 fps · capturando 1280×720 a 30 fps");
+
+    await userEvent.selectOptions(picker(), "1080p 30 fps");
+    expect(track.applyConstraints).toHaveBeenLastCalledWith(
+      expect.objectContaining({ width: expect.objectContaining({ max: 1920 }), frameRate: expect.objectContaining({ max: 30 }) }),
+    );
+    expect(await screen.findByText(/Qualidade ativa/)).toHaveTextContent("1080p 30 fps · capturando 1920×1080 a 30 fps");
+    expect(sent.at(-1)).toMatchObject({ maxFramerate: 30, maxBitrate: 2_500_000 });
+
+    await userEvent.selectOptions(picker(), "1080p 60 fps");
+    expect(await screen.findByText(/Qualidade ativa/)).toHaveTextContent("1080p 60 fps · capturando 1920×1080 a 60 fps");
+    expect(sent.at(-1)).toMatchObject({ maxFramerate: 60, maxBitrate: 4_000_000 });
+
+    // Sem parar: a mesma trilha continua no ar, uma única captura.
+    expect(getDisplayMedia).toHaveBeenCalledTimes(1);
+    expect(track.stopped).toBe(false);
+    expect(screenSlot.sender.track).toBe(track);
+    expect(ws.sent.filter((m) => (m as { type: string }).type === "screen")).toEqual([{ type: "screen", on: true }]);
+  });
+
+  it("se o navegador recusar a troca, avisa e mantém a qualidade anterior", async () => {
+    const track = fakeScreenTrack();
+    mockGetDisplayMedia(async (opts) => {
+      track.fit(opts?.video as MediaTrackConstraints);
+      return new FakeMediaStream([track]);
+    });
+    await inRoom();
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    await screen.findByText(/Qualidade ativa/);
+
+    track.applyConstraints.mockRejectedValueOnce(new DOMException("no", "OverconstrainedError"));
+    await userEvent.selectOptions(picker(), "1080p 60 fps");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não deu para mudar a qualidade");
+    expect(picker()).toHaveValue("720p30");
+    expect(screen.getByText(/Qualidade ativa/)).toHaveTextContent("720p 30 fps");
+  });
+
+  it("lembra a qualidade escolhida da última vez", async () => {
+    localStorage.setItem("telao:screenQuality", "1080p30");
+    mockGetDisplayMedia(async () => new FakeMediaStream([fakeScreenTrack()]));
+    await inRoom();
+    expect(picker()).toHaveValue("1080p30");
   });
 });

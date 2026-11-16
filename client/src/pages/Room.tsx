@@ -6,6 +6,7 @@ import { copyText } from "../clipboard";
 import { DeviceErrorNotice } from "../components/DeviceErrorNotice";
 import { CamIcon, CamOffIcon, MicIcon, MicOffIcon, ScreenIcon } from "../components/icons";
 import { RemoteAudio, unlockRemoteAudio } from "../components/RemoteAudio";
+import { QualityPicker } from "../components/QualityPicker";
 import { Stage } from "../components/Stage";
 import { ALL_DEVICES, useMedia, type Device, type DeviceState } from "../media/useMedia";
 import { joinRoom, type ConnectionEvent, type RoomConnection } from "../roomConnection";
@@ -234,6 +235,11 @@ export function Room() {
             <DeviceErrorNotice key={d} device={d} error={media.errors[d]} onDismiss={() => media.dismissError(d)} />
           ),
       )}
+      {media.qualityError && (
+        <div className="notice" role="alert">
+          Não deu para mudar a qualidade agora. O compartilhamento continua na qualidade anterior.
+        </div>
+      )}
       {audioBlocked && (
         <div className="notice notice-row" role="alert">
           <div>O navegador pausou o som dos outros participantes.</div>
@@ -294,6 +300,8 @@ export function Room() {
               remote={media.remote}
               localCamera={media.local.cam}
               localScreen={media.local.screen}
+              screenQuality={media.screenQuality}
+              screenCapture={media.screenCapture}
             />
           )}
           {inRoom && (
@@ -301,6 +309,7 @@ export function Room() {
               {ALL_DEVICES.map((d) => (
                 <DeviceButton key={d} device={d} state={media.state[d]} onClick={() => media.toggle(d)} />
               ))}
+              <QualityPicker value={media.screenQuality} onChange={(q) => void media.setScreenQuality(q)} />
             </div>
           )}
 

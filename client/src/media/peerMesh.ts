@@ -1,4 +1,6 @@
 import type { SignalData } from "../../../shared/protocol";
+import { DEFAULT_SCREEN_QUALITY, sendParams, type SendParams } from "./screenQuality";
+import { withStartBitrate } from "./sdp";
 
 /**
  * Servidores STUN públicos, para descobrir o endereço público de cada pessoa.
@@ -20,8 +22,11 @@ export const SLOTS = [
 ] as const;
 export type Slot = (typeof SLOTS)[number]["name"];
 
-/** Limite de banda por canal enviado (bits/s). Cada pessoa envia até 5 cópias. */
-const MAX_BITRATE: Partial<Record<Slot, number>> = { camera: 500_000, screen: 1_500_000 };
+/** Limites de envio padrão por canal (por cópia; cada pessoa envia até 5). */
+const DEFAULT_SEND_PARAMS: Partial<Record<Slot, SendParams>> = {
+  camera: { maxBitrate: 500_000 },
+  screen: sendParams(DEFAULT_SCREEN_QUALITY),
+};
 
 interface Peer {
   pc: RTCPeerConnection;
@@ -59,6 +64,7 @@ export interface PeerMeshOptions {
 export class PeerMesh {
   private peers = new Map<string, Peer>();
   private local: Record<Slot, MediaStreamTrack | null> = { audio: null, camera: null, screen: null };
+  private params: Partial<Record<Slot, SendParams>> = { ...DEFAULT_SEND_PARAMS };
   private closed = false;
 
   constructor(private readonly opts: PeerMeshOptions) {}
@@ -79,6 +85,17 @@ export class PeerMesh {
   setTrack(slot: Slot, track: MediaStreamTrack | null): void {
     this.local[slot] = track;
     for (const peer of this.peers.values()) this.applyTrack(peer, slot);
+  }
+
+  /** Muda banda/fps máximos enviados num canal, em todas as conexões (sem renegociar). */
+  setSendParams(slot: Slot, params: SendParams): Promise<void> {
+    this.params[slot] = params;
+    return Promise.all(
+      [...this.peers.values()].map((peer) => {
+        const t = peer.transceivers[slot];
+        return t ? applySendParams(t.sender, params) : undefined;
+      }),
+    ).then(() => {});
   }
 
   handleSignal(from: string, data: SignalData): void {
@@ -149,10 +166,10 @@ export class PeerMesh {
     if (peer.offerer) {
       // Reserva todos os canais já na primeira oferta (dispara a negociação).
       for (const slot of SLOTS) {
-        const maxBitrate = MAX_BITRATE[slot.name];
+        const params = this.params[slot.name];
         const t = pc.addTransceiver(slot.kind, {
           direction: "sendrecv",
-          sendEncodings: maxBitrate ? [{ maxBitrate }] : undefined,
+          sendEncodings: params ? [{ maxBitrate: params.maxBitrate, maxFramerate: params.maxFramerate }] : undefined,
         });
         this.adopt(peer, slot.name, t);
       }
@@ -168,16 +185,28 @@ export class PeerMesh {
       const collision = description.type === "offer" && (peer.makingOffer || pc.signalingState !== "stable");
       peer.ignoreOffer = peer.offerer && collision;
       if (peer.ignoreOffer) return;
-      await pc.setRemoteDescription(description);
+      // Começa a estimativa de banda alta, para a tela não sair borrada no início.
+      await pc.setRemoteDescription(
+        description.sdp ? { type: description.type, sdp: withStartBitrate(description.sdp) } : description,
+      );
+      if (description.type === "answer") {
+        // Negociação concluída: aplica os limites completos (sendEncodings não
+        // cobre degradationPreference).
+        for (const slot of SLOTS) {
+          const params = this.params[slot.name];
+          const t = peer.transceivers[slot.name];
+          if (params && t) void applySendParams(t.sender, params);
+        }
+      }
       if (description.type === "offer") {
         const adopted = this.adoptRemoteTransceivers(peer);
         await pc.setLocalDescription();
         this.opts.sendSignal(from, { description: pc.localDescription?.toJSON() });
         // Só depois da resposta o navegador tem os parâmetros de envio.
         for (const slot of adopted) {
-          const maxBitrate = MAX_BITRATE[slot];
+          const params = this.params[slot];
           const t = peer.transceivers[slot];
-          if (maxBitrate && t) limitBitrate(t.sender, maxBitrate);
+          if (params && t) void applySendParams(t.sender, params);
         }
       }
     } else if (candidate !== undefined) {
@@ -211,13 +240,19 @@ export class PeerMesh {
   }
 }
 
-function limitBitrate(sender: RTCRtpSender, maxBitrate: number): void {
+async function applySendParams(
+  sender: RTCRtpSender,
+  { maxBitrate, maxFramerate, degradationPreference }: SendParams,
+): Promise<void> {
   try {
-    const params = sender.getParameters();
+    const params = sender.getParameters() as RTCRtpSendParameters & { degradationPreference?: string };
+    if (degradationPreference) params.degradationPreference = degradationPreference;
     if (!params.encodings?.length) return;
     params.encodings[0].maxBitrate = maxBitrate;
-    sender.setParameters(params).catch(() => {});
+    if (maxFramerate) params.encodings[0].maxFramerate = maxFramerate;
+    else delete params.encodings[0].maxFramerate;
+    await sender.setParameters(params);
   } catch {
-    // Navegador sem suporte: segue sem limite.
+    // Navegador sem suporte: segue com o que conseguir.
   }
 }

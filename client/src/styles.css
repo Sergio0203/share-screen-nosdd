@@ -114,7 +114,9 @@ kbd { padding: 0 0.3em; border: 1px solid var(--border); border-radius: 4px; fon
 
 .tiles {
   width: 100%; display: grid; gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  /* Até 480px por vídeo: um vídeo sozinho não toma a tela nem empurra os botões. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 480px));
+  justify-content: center;
 }
 .tile {
   position: relative; margin: 0; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden;
@@ -146,3 +148,12 @@ kbd { padding: 0 0.3em; border: 1px solid var(--border); border-radius: 4px; fon
 @media (max-width: 700px) {
   .screen-view { height: auto; aspect-ratio: 16 / 9; min-height: 0; }
 }
+
+.quality-picker { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--muted); font-size: 0.9rem; }
+.quality-picker select {
+  padding: 0.6rem 0.75rem; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font: inherit; font-weight: 600;
+}
+.sharing-banner { text-align: center; }
+.sharing-banner p { margin: 0; }
+.sharing-quality { font-size: 0.9rem; color: var(--text); font-weight: 400; margin-top: 0.2rem !important; }

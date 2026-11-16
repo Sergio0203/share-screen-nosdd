@@ -42,3 +42,53 @@ export async function enter(page: Page, name: string) {
 /** Ícones de estado (microfone, câmera) de uma pessoa na lista de participantes. */
 export const statusIcons = (page: Page, name: string) =>
   page.getByRole("complementary", { name: "Participantes" }).getByRole("listitem").filter({ hasText: name }).getByRole("img");
+
+/** Guarda as RTCPeerConnection da página, para o teste ler as estatísticas. */
+export async function trackPeerConnections(page: Page) {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __pcs: RTCPeerConnection[] };
+    w.__pcs = [];
+    const Original = window.RTCPeerConnection;
+    window.RTCPeerConnection = class extends Original {
+      constructor(...args: ConstructorParameters<typeof RTCPeerConnection>) {
+        super(...args);
+        w.__pcs.push(this);
+      }
+    };
+  });
+}
+
+export interface VideoStats {
+  width: number;
+  height: number;
+  fps: number;
+  /** Só no envio: limite de fps configurado no encoder. */
+  maxFramerate?: number;
+  framesSent?: number;
+  trackId?: string;
+}
+
+/** Estatísticas do canal de tela (3º canal) na primeira conexão aberta. */
+export async function screenStats(page: Page, side: "send" | "receive"): Promise<VideoStats | null> {
+  return page.evaluate(async (side) => {
+    const pcs = (window as unknown as { __pcs: RTCPeerConnection[] }).__pcs;
+    const pc = pcs.find((p) => p.connectionState === "connected");
+    const t = pc?.getTransceivers()[2];
+    if (!t) return null;
+    const type = side === "send" ? "outbound-rtp" : "inbound-rtp";
+    const report = await (side === "send" ? t.sender : t.receiver).getStats();
+    let s: Record<string, number> | undefined;
+    report.forEach((r) => {
+      if (r.type === type && r.frameHeight) s = r;
+    });
+    if (!s) return null;
+    return {
+      width: s.frameWidth,
+      height: s.frameHeight,
+      fps: s.framesPerSecond ?? 0,
+      maxFramerate: side === "send" ? t.sender.getParameters().encodings[0]?.maxFramerate : undefined,
+      framesSent: s.framesSent,
+      trackId: side === "send" ? t.sender.track?.id : undefined,
+    };
+  }, side);
+}
