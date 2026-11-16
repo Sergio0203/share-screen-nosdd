@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { MAX_NAME_LENGTH, MAX_PARTICIPANTS, normalizeName, type Participant } from "../../../shared/protocol";
 import { getRoom, roomUrl } from "../api";
 import { copyText } from "../clipboard";
+import { MicIcon, MicOffIcon } from "../components/icons";
+import { MicErrorNotice } from "../components/MicErrorNotice";
+import { RemoteAudio, unlockRemoteAudio } from "../components/RemoteAudio";
+import { useVoice } from "../media/useVoice";
 import { joinRoom, type ConnectionEvent, type RoomConnection } from "../roomConnection";
 import type { JustCreatedState } from "./Home";
 
@@ -43,6 +47,9 @@ export function Room() {
   const navigate = useNavigate();
   const linkInput = useRef<HTMLInputElement>(null);
   const connection = useRef<RoomConnection | null>(null);
+  /** A mesma conexão, como estado, para os efeitos de mídia reagirem a ela. */
+  const [activeConnection, setActiveConnection] = useState<RoomConnection | null>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
 
   // Lido uma única vez: resultado da cópia automática feita ao criar a sala.
   const [copyState, setCopyState] = useState<CopyState>(() => {
@@ -55,6 +62,16 @@ export function Room() {
   const [nameError, setNameError] = useState<string | null>(null);
 
   const url = roomUrl(id);
+  const inRoom = phase.kind === "in_room" ? phase : null;
+
+  const voice = useVoice({
+    connection: inRoom ? activeConnection : null,
+    selfId: inRoom?.selfId ?? null,
+    participants: inRoom?.participants ?? [],
+  });
+  const handleSignal = useRef(voice.handleSignal);
+  handleSignal.current = voice.handleSignal;
+  const onAudioBlocked = useCallback(() => setAudioBlocked(true), []);
 
   // Limpa o estado da navegação para não repetir o aviso ao recarregar.
   useEffect(() => {
@@ -76,6 +93,7 @@ export function Room() {
       cancelled = true;
       connection.current?.close();
       connection.current = null;
+      setActiveConnection(null);
     };
   }, [id]);
 
@@ -94,8 +112,12 @@ export function Room() {
       case "participants":
         setPhase((p) => (p.kind === "in_room" ? { ...p, participants: e.participants } : p));
         break;
+      case "signal":
+        handleSignal.current(e.from, e.data);
+        break;
       case "error":
         connection.current = null;
+        setActiveConnection(null);
         if (e.code === "room_full") setPhase({ kind: "full" });
         else if (e.code === "room_not_found") setPhase({ kind: "not_found" });
         else if (e.code === "invalid_name") {
@@ -105,6 +127,7 @@ export function Room() {
         break;
       case "disconnected":
         connection.current = null;
+        setActiveConnection(null);
         setPhase({ kind: "disconnected" });
         break;
     }
@@ -113,7 +136,9 @@ export function Room() {
   function enter(displayName: string) {
     connection.current?.close();
     setPhase({ kind: "joining" });
-    connection.current = joinRoom(id, displayName, handleEvent);
+    const conn = joinRoom(id, displayName, handleEvent);
+    connection.current = conn;
+    setActiveConnection(conn);
   }
 
   function handleSubmit(e: FormEvent) {
@@ -202,6 +227,21 @@ export function Room() {
           para mandar para a galera.
         </p>
       )}
+      {voice.micError && <MicErrorNotice error={voice.micError} onDismiss={voice.dismissMicError} />}
+      {audioBlocked && (
+        <div className="notice notice-row" role="alert">
+          <div>O navegador pausou o som dos outros participantes.</div>
+          <button
+            className="btn btn-primary btn-small"
+            onClick={() => {
+              unlockRemoteAudio();
+              setAudioBlocked(false);
+            }}
+          >
+            Ativar som
+          </button>
+        </div>
+      )}
       {copyState === "manual_failed" && (
         <p className="notice" role="alert">
           Não deu para copiar. O link está selecionado — use <kbd>Ctrl</kbd>+<kbd>C</kbd>.
@@ -241,6 +281,21 @@ export function Room() {
           )}
 
           {phase.kind === "in_room" && <p className="muted">Você está na sala.</p>}
+          {phase.kind === "in_room" && (
+            <div className="controls">
+              <button
+                className={`btn btn-control ${voice.mic === "on" ? "is-on" : ""}`}
+                onClick={voice.toggleMic}
+                disabled={voice.mic === "starting"}
+                aria-pressed={voice.mic === "on"}
+              >
+                {voice.mic === "on" ? <MicIcon /> : <MicOffIcon />}
+                <span>
+                  {voice.mic === "on" ? "Desligar microfone" : voice.mic === "starting" ? "Ligando…" : "Ligar microfone"}
+                </span>
+              </button>
+            </div>
+          )}
 
           {phase.kind === "disconnected" && (
             <div className="center-block">
@@ -267,14 +322,28 @@ export function Room() {
                   <span className="avatar" aria-hidden>
                     {[...p.name][0]?.toUpperCase()}
                   </span>
-                  <span className="participant-name">{p.name}</span>
-                  {p.id === phase.selfId && <span className="muted"> (você)</span>}
+                  <span className="participant-name">
+                    {p.name}
+                    {p.id === phase.selfId && <span className="muted"> (você)</span>}
+                  </span>
+                  <span
+                    className={`mic-status ${p.micOn ? "is-on" : ""}`}
+                    role="img"
+                    aria-label={p.micOn ? "microfone ligado" : "microfone desligado"}
+                    title={p.micOn ? "Microfone ligado" : "Microfone desligado"}
+                  >
+                    {p.micOn ? <MicIcon size={16} /> : <MicOffIcon size={16} />}
+                  </span>
                 </li>
               ))}
             </ul>
           </aside>
         )}
       </div>
+
+      {Object.entries(voice.remoteStreams).map(([peerId, stream]) => (
+        <RemoteAudio key={peerId} stream={stream} onBlocked={onAudioBlocked} />
+      ))}
 
       {copyState === "copied" && (
         <div className="toast" role="status">

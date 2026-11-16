@@ -51,7 +51,7 @@ export class RoomStore {
     const room = this.get(roomId);
     if (!room) return { ok: false, reason: "room_not_found" };
     if (room.participants.size >= MAX_PARTICIPANTS) return { ok: false, reason: "room_full" };
-    const participant: Participant = { id: randomUUID(), name };
+    const participant: Participant = { id: randomUUID(), name, micOn: false };
     room.participants.set(participant.id, participant);
     room.lastActiveAt = this.now();
     return { ok: true, participant };
@@ -63,9 +63,14 @@ export class RoomStore {
     room.lastActiveAt = this.now();
   }
 
+  setMic(roomId: string, participantId: string, on: boolean): void {
+    const participant = this.rooms.get(roomId)?.participants.get(participantId);
+    if (participant) participant.micOn = on;
+  }
+
   /** Participantes na ordem de entrada. */
   list(roomId: string): Participant[] {
-    return [...(this.rooms.get(roomId)?.participants.values() ?? [])];
+    return [...(this.rooms.get(roomId)?.participants.values() ?? [])].map((p) => ({ ...p }));
   }
 
   /** Remove salas expiradas. Chamado periodicamente pelo servidor. */

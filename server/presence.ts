@@ -78,6 +78,25 @@ export function registerPresence(app: FastifyInstance, store: RoomStore, opts: P
 
         send(socket, { type: "joined", selfId: participantId, participants: store.list(roomId) });
         broadcast(roomId);
+        return;
+      }
+
+      // Daqui para baixo, só quem já entrou na sala.
+      if (!participantId) return fail(socket, "bad_message");
+
+      if (msg.type === "mic") {
+        store.setMic(roomId, participantId, msg.on === true);
+        broadcast(roomId);
+        return;
+      }
+
+      if (msg.type === "signal") {
+        // Só entrega para alguém da mesma sala.
+        const target = typeof msg.to === "string" ? sockets.get(roomId)?.get(msg.to) : undefined;
+        if (target && msg.to !== participantId) {
+          send(target, { type: "signal", from: participantId, data: msg.data });
+        }
+        return;
       }
     });
 

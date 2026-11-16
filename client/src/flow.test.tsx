@@ -52,6 +52,87 @@ class FakeWebSocket extends EventTarget {
 }
 const lastSocket = () => FakeWebSocket.instances.at(-1)!;
 
+/** Só o suficiente de WebRTC para a UI rodar no jsdom (o fluxo real é testado no e2e). */
+class FakeMediaStream {
+  tracks: unknown[];
+  constructor(tracks: unknown[] = []) {
+    this.tracks = [...tracks];
+  }
+  addTrack(t: unknown) {
+    this.tracks.push(t);
+  }
+  removeTrack(t: unknown) {
+    this.tracks = this.tracks.filter((x) => x !== t);
+  }
+  getAudioTracks() {
+    return this.tracks;
+  }
+}
+interface FakeTransceiver {
+  direction: string;
+  sender: { track: unknown; replaceTrack: (t: unknown) => Promise<void>; setStreams: () => void };
+  receiver: { track: { kind: string } };
+}
+function fakeTransceiver(direction: string): FakeTransceiver {
+  const sender = {
+    track: null as unknown,
+    replaceTrack: async (t: unknown) => {
+      sender.track = t;
+    },
+    setStreams: () => {},
+  };
+  return { direction, sender, receiver: { track: { kind: "audio" } } };
+}
+class FakePeerConnection {
+  static instances: FakePeerConnection[] = [];
+  transceivers: FakeTransceiver[] = [];
+  signalingState = "stable";
+  connectionState = "new";
+  localDescription = null;
+  closed = false;
+  onnegotiationneeded: (() => void) | null = null;
+  onicecandidate = null;
+  ontrack: ((e: { track: { kind: string }; streams: unknown[] }) => void) | null = null;
+  onconnectionstatechange = null;
+  constructor() {
+    FakePeerConnection.instances.push(this);
+  }
+  addTransceiver(_kind: string, init: { direction: string }) {
+    const t = fakeTransceiver(init.direction);
+    this.transceivers.push(t);
+    return t;
+  }
+  getTransceivers() {
+    return this.transceivers;
+  }
+  async setLocalDescription() {}
+  async setRemoteDescription(d: { type: string }) {
+    // Uma oferta remota cria o canal de áudio do lado que responde.
+    if (d.type === "offer" && this.transceivers.length === 0) this.transceivers.push(fakeTransceiver("recvonly"));
+  }
+  async addIceCandidate() {}
+  restartIce() {}
+  close() {
+    this.closed = true;
+  }
+}
+
+function fakeMicTrack() {
+  const t = new EventTarget() as EventTarget & { kind: string; stop: () => void; stopped: boolean };
+  t.kind = "audio";
+  t.stopped = false;
+  t.stop = () => {
+    t.stopped = true;
+  };
+  return t;
+}
+
+function mockGetUserMedia(impl: () => Promise<unknown>) {
+  const getUserMedia = vi.fn(impl);
+  Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia }, configurable: true });
+  return getUserMedia;
+}
+
 function mockClipboard(impl: { write?: unknown; writeText?: unknown }) {
   Object.defineProperty(navigator, "clipboard", { value: impl, configurable: true });
 }
@@ -64,7 +145,8 @@ function renderAt(path: string) {
   );
 }
 
-const people = (...names: string[]): Participant[] => names.map((name, i) => ({ id: `id-${i}`, name }));
+const people = (...names: string[]): Participant[] =>
+  names.map((name, i) => ({ id: `id-${i}`, name, micOn: false }));
 
 async function enterAs(name: string) {
   const input = await screen.findByLabelText("Seu nome");
@@ -79,6 +161,9 @@ beforeEach(() => {
   FakeWebSocket.instances = [];
   mockFetch();
   vi.stubGlobal("WebSocket", FakeWebSocket);
+  vi.stubGlobal("RTCPeerConnection", FakePeerConnection);
+  vi.stubGlobal("MediaStream", FakeMediaStream);
+  FakePeerConnection.instances = [];
   // jsdom não tem ClipboardItem; um stub simples basta.
   vi.stubGlobal(
     "ClipboardItem",
@@ -195,7 +280,7 @@ describe("Entrar na sala pelo link", () => {
     ws.serverSends({ type: "participants", participants: people("Ana", "Bia", "Caio") });
     expect(within(list).getByText("Caio")).toBeInTheDocument();
 
-    ws.serverSends({ type: "participants", participants: [{ id: "id-1", name: "Bia" }] });
+    ws.serverSends({ type: "participants", participants: [{ id: "id-1", name: "Bia", micOn: false }] });
     expect(within(list).queryByText("Ana")).not.toBeInTheDocument();
     expect(list).toHaveTextContent("(1/6)");
   });
@@ -235,5 +320,134 @@ describe("Entrar na sala pelo link", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Entrar de novo" }));
     expect(FakeWebSocket.instances).toHaveLength(2);
     await vi.waitFor(() => expect(lastSocket().sent).toEqual([{ type: "join", name: "Ana" }]));
+  });
+});
+
+describe("Conversar por voz", () => {
+  beforeEach(() => mockClipboard({}));
+
+  async function inRoomWith(...others: Participant[]) {
+    renderAt(`/sala/${ROOM_ID}`);
+    await enterAs("Ana");
+    const ws = lastSocket();
+    ws.serverSends({
+      type: "joined",
+      selfId: "me",
+      participants: [{ id: "me", name: "Ana", micOn: false }, ...others],
+    });
+    await screen.findByText("Você está na sala.");
+    return ws;
+  }
+
+  const micButton = () => screen.getByRole("button", { name: /microfone/ });
+
+  it("entra com o microfone desligado, sem pedir permissão", async () => {
+    const getUserMedia = mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
+    const ws = await inRoomWith();
+    expect(micButton()).toHaveAccessibleName("Ligar microfone");
+    expect(micButton()).toHaveAttribute("aria-pressed", "false");
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(ws.sent).not.toContainEqual(expect.objectContaining({ type: "mic" }));
+  });
+
+  it("o botão liga e desliga o microfone e avisa o servidor", async () => {
+    const track = fakeMicTrack();
+    mockGetUserMedia(async () => new FakeMediaStream([track]));
+    // "me" < "zoe": eu sou quem oferece, a conexão nasce assim que ela aparece.
+    const ws = await inRoomWith({ id: "zoe", name: "Zoe", micOn: false });
+    expect(FakePeerConnection.instances).toHaveLength(1);
+    const audio = FakePeerConnection.instances[0].transceivers[0];
+    expect(audio.direction).toBe("sendrecv");
+    expect(audio.sender.track).toBeNull();
+
+    await userEvent.click(micButton());
+    expect(await screen.findByRole("button", { name: "Desligar microfone" })).toHaveAttribute("aria-pressed", "true");
+    expect(ws.sent).toContainEqual({ type: "mic", on: true });
+    // O áudio passa a ser enviado para a Zoe.
+    await vi.waitFor(() => expect(audio.sender.track).toBe(track));
+
+    await userEvent.click(micButton());
+    expect(micButton()).toHaveAccessibleName("Ligar microfone");
+    expect(ws.sent.at(-1)).toEqual({ type: "mic", on: false });
+    expect(track.stopped).toBe(true);
+    await vi.waitFor(() => expect(audio.sender.track).toBeNull());
+  });
+
+  it("todos veem quem está com o microfone ligado ou desligado", async () => {
+    mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true }, { id: "caio", name: "Caio", micOn: false });
+    const list = screen.getByRole("complementary", { name: "Participantes" });
+    const row = (name: string) => within(list).getByText(name).closest("li")!;
+
+    expect(within(row("Bia")).getByRole("img", { name: "microfone ligado" })).toBeInTheDocument();
+    expect(within(row("Caio")).getByRole("img", { name: "microfone desligado" })).toBeInTheDocument();
+
+    ws.serverSends({
+      type: "participants",
+      participants: [
+        { id: "me", name: "Ana", micOn: false },
+        { id: "bia", name: "Bia", micOn: false },
+        { id: "caio", name: "Caio", micOn: true },
+      ],
+    });
+    expect(within(row("Bia")).getByRole("img", { name: "microfone desligado" })).toBeInTheDocument();
+    expect(within(row("Caio")).getByRole("img", { name: "microfone ligado" })).toBeInTheDocument();
+  });
+
+  it("permissão negada explica como liberar e o resto da sala continua funcionando", async () => {
+    mockGetUserMedia(async () => {
+      throw new DOMException("Permission denied", "NotAllowedError");
+    });
+    const ws = await inRoomWith();
+
+    await userEvent.click(micButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("O navegador bloqueou o microfone.");
+    expect(alert).toHaveTextContent(/cadeado/);
+    expect(alert).toHaveTextContent(/continua na sala/);
+    expect(micButton()).toHaveAccessibleName("Ligar microfone");
+    expect(ws.sent).not.toContainEqual({ type: "mic", on: true });
+
+    // A sala segue viva: a lista atualiza e o link continua copiável.
+    ws.serverSends({
+      type: "participants",
+      participants: [
+        { id: "me", name: "Ana", micOn: false },
+        { id: "bia", name: "Bia", micOn: true },
+      ],
+    });
+    expect(screen.getByText("Bia")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copiar link" })).toBeEnabled();
+  });
+
+  it("sem microfone conectado mostra outra mensagem", async () => {
+    mockGetUserMedia(async () => {
+      throw new DOMException("none", "NotFoundError");
+    });
+    await inRoomWith();
+    await userEvent.click(micButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent("Nenhum microfone encontrado.");
+  });
+
+  it("toca o áudio que chega de outra pessoa e para quando ela sai", async () => {
+    mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
+    HTMLMediaElement.prototype.play = vi.fn(async () => {});
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true });
+
+    // "bia" < "me": a Bia oferece; a conexão só nasce quando a oferta chega.
+    expect(FakePeerConnection.instances).toHaveLength(0);
+    ws.serverSends({ type: "signal", from: "bia", data: { description: { type: "offer", sdp: "x" } } });
+    await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
+    // Quem responde também passa a enviar pelo mesmo canal.
+    await vi.waitFor(() => expect(FakePeerConnection.instances[0].transceivers[0].direction).toBe("sendrecv"));
+    const remote = new FakeMediaStream([{ kind: "audio" }]);
+    act(() => FakePeerConnection.instances[0].ontrack!({ track: { kind: "audio" }, streams: [remote] }));
+    const audio = document.querySelector("audio[data-remote-audio]") as HTMLAudioElement;
+    expect(audio).not.toBeNull();
+    expect(audio.srcObject).toBe(remote);
+
+    ws.serverSends({ type: "participants", participants: [{ id: "me", name: "Ana", micOn: false }] });
+    expect(document.querySelector("audio[data-remote-audio]")).toBeNull();
+    expect(FakePeerConnection.instances[0].closed).toBe(true);
   });
 });

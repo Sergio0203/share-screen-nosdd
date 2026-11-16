@@ -101,3 +101,13 @@ kbd { padding: 0 0.3em; border: 1px solid var(--border); border-radius: 4px; fon
   .room-body { flex-direction: column-reverse; }
   .participants { width: auto; border-left: none; border-bottom: 1px solid var(--border); }
 }
+
+.stage { flex-direction: column; gap: 1.5rem; }
+.controls { display: flex; gap: 0.75rem; justify-content: center; }
+.btn-control { gap: 0.5rem; padding: 0.75rem 1.25rem; border-radius: 999px; }
+.btn-control.is-on { background: var(--ok); border-color: var(--ok); color: #04210f; }
+.btn-small { padding: 0.3rem 0.6rem; font-size: 0.9rem; }
+.notice-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.participant-name { flex: 1; min-width: 0; }
+.mic-status { display: inline-flex; color: var(--muted); flex-shrink: 0; }
+.mic-status.is-on { color: var(--ok); }

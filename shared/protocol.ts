@@ -6,15 +6,29 @@ export const MAX_NAME_LENGTH = 30;
 export interface Participant {
   id: string;
   name: string;
+  micOn: boolean;
 }
 
-export type ClientMessage = { type: "join"; name: string };
+/**
+ * Dados de sinalização WebRTC repassados de um participante para outro.
+ * O servidor não interpreta: só entrega ao destinatário.
+ */
+export interface SignalData {
+  description?: RTCSessionDescriptionInit | null;
+  candidate?: RTCIceCandidateInit | null;
+}
+
+export type ClientMessage =
+  | { type: "join"; name: string }
+  | { type: "mic"; on: boolean }
+  | { type: "signal"; to: string; data: SignalData };
 
 export type ErrorCode = "room_not_found" | "room_full" | "invalid_name" | "bad_message";
 
 export type ServerMessage =
   | { type: "joined"; selfId: string; participants: Participant[] }
   | { type: "participants"; participants: Participant[] }
+  | { type: "signal"; from: string; data: SignalData }
   | { type: "error"; code: ErrorCode };
 
 /** Normaliza o nome: tira espaços extras. Retorna null se inválido. */

@@ -1,13 +1,22 @@
-import { roomSocketPath, type ErrorCode, type Participant, type ServerMessage } from "../../shared/protocol";
+import {
+  roomSocketPath,
+  type ClientMessage,
+  type ErrorCode,
+  type Participant,
+  type ServerMessage,
+  type SignalData,
+} from "../../shared/protocol";
 
 export type ConnectionEvent =
   | { type: "joined"; selfId: string; participants: Participant[] }
   | { type: "participants"; participants: Participant[] }
+  | { type: "signal"; from: string; data: SignalData }
   | { type: "error"; code: ErrorCode }
   /** Conexão caiu sem que tenhamos pedido para sair. */
   | { type: "disconnected" };
 
 export interface RoomConnection {
+  send(msg: ClientMessage): void;
   close(): void;
 }
 
@@ -42,6 +51,9 @@ export function joinRoom(roomId: string, name: string, onEvent: (e: ConnectionEv
   });
 
   return {
+    send(msg) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+    },
     close() {
       closedByUs = true;
       socket.close();

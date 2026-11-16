@@ -162,3 +162,69 @@ describe("presença na sala", () => {
     await ana.waitFor(participantsAre("Ana"), 2000);
   });
 });
+
+describe("voz: estado do microfone e sinalização", () => {
+  const isSignal = (m: ServerMessage): m is Extract<ServerMessage, { type: "signal" }> => m.type === "signal";
+
+  async function twoInRoom() {
+    const room = await createRoom();
+    const ana = connect(room);
+    await ana.join("Ana");
+    const anaId = (await ana.waitFor(isJoined)).selfId;
+    const bia = connect(room);
+    await bia.join("Bia");
+    const biaId = (await bia.waitFor(isJoined)).selfId;
+    await ana.waitFor(participantsAre("Ana", "Bia"));
+    return { room, ana, anaId, bia, biaId };
+  }
+
+  it("todos entram com o microfone desligado", async () => {
+    const { bia } = await twoInRoom();
+    const joined = await bia.waitFor(isJoined);
+    expect(joined.participants.every((p) => p.micOn === false)).toBe(true);
+  });
+
+  it("ligar/desligar o microfone é repassado a todos", async () => {
+    const { ana, bia, anaId } = await twoInRoom();
+    ana.ws.send(JSON.stringify({ type: "mic", on: true }));
+    const micOn = (m: ServerMessage): m is Extract<ServerMessage, { type: "participants" }> =>
+      m.type === "participants" && m.participants.find((p) => p.id === anaId)?.micOn === true;
+    await bia.waitFor(micOn);
+
+    ana.ws.send(JSON.stringify({ type: "mic", on: false }));
+    await bia.waitFor(
+      (m): m is Extract<ServerMessage, { type: "participants" }> =>
+        m.type === "participants" && m.participants.find((p) => p.id === anaId)?.micOn === false,
+    );
+  });
+
+  it("sinalização chega só ao destinatário, com o remetente", async () => {
+    const { ana, anaId, bia, biaId, room } = await twoInRoom();
+    const caio = connect(room);
+    await caio.join("Caio");
+    await caio.waitFor(isJoined);
+
+    const data = { description: { type: "offer", sdp: "v=0" } };
+    ana.ws.send(JSON.stringify({ type: "signal", to: biaId, data }));
+    const got = await bia.waitFor(isSignal);
+    expect(got).toEqual({ type: "signal", from: anaId, data });
+
+    await new Promise((r) => setTimeout(r, 100));
+    expect(caio.messages.some((m) => m.type === "signal")).toBe(false);
+  });
+
+  it("não repassa sinalização para outra sala nem antes de entrar", async () => {
+    const { bia, biaId } = await twoInRoom();
+    const otherRoom = await createRoom();
+    const intruso = connect(otherRoom);
+    await intruso.join("Intruso");
+    await intruso.waitFor(isJoined);
+    intruso.ws.send(JSON.stringify({ type: "signal", to: biaId, data: {} }));
+
+    const anon = connect(otherRoom);
+    await new Promise<void>((r) => anon.ws.addEventListener("open", () => r())); // conecta mas não entra
+    anon.ws.send(JSON.stringify({ type: "signal", to: biaId, data: {} }));
+    expect((await anon.waitFor(isError)).code).toBe("bad_message");
+    expect(bia.messages.some((m) => m.type === "signal")).toBe(false);
+  });
+});
