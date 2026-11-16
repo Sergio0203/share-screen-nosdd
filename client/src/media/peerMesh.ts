@@ -16,11 +16,12 @@ export const DEFAULT_RTC_CONFIG: RTCConfiguration = {
 export const SLOTS = [
   { name: "audio", kind: "audio" },
   { name: "camera", kind: "video" },
+  { name: "screen", kind: "video" },
 ] as const;
 export type Slot = (typeof SLOTS)[number]["name"];
 
 /** Limite de banda por canal enviado (bits/s). Cada pessoa envia até 5 cópias. */
-const MAX_BITRATE: Partial<Record<Slot, number>> = { camera: 500_000 };
+const MAX_BITRATE: Partial<Record<Slot, number>> = { camera: 500_000, screen: 1_500_000 };
 
 interface Peer {
   pc: RTCPeerConnection;
@@ -47,7 +48,7 @@ export interface PeerMeshOptions {
  *
  * Para evitar colisão de ofertas, em cada par só quem tem o menor id oferece.
  * A conexão é montada assim que os dois estão na sala, já com todos os canais
- * (áudio, câmera) nos dois sentidos; ligar/desligar um dispositivo só troca a
+ * (áudio, câmera, tela) nos dois sentidos; ligar/desligar um dispositivo só troca a
  * trilha (replaceTrack), sem renegociar.
  *
  * Por que não deixar os dois lados negociarem ("perfect negotiation")?
@@ -57,7 +58,7 @@ export interface PeerMeshOptions {
  */
 export class PeerMesh {
   private peers = new Map<string, Peer>();
-  private local: Record<Slot, MediaStreamTrack | null> = { audio: null, camera: null };
+  private local: Record<Slot, MediaStreamTrack | null> = { audio: null, camera: null, screen: null };
   private closed = false;
 
   constructor(private readonly opts: PeerMeshOptions) {}

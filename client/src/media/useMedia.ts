@@ -3,24 +3,69 @@ import type { Participant, SignalData } from "../../../shared/protocol";
 import type { RoomConnection } from "../roomConnection";
 import { PeerMesh, type Slot } from "./peerMesh";
 
-export type Device = "mic" | "cam";
+export type Device = "mic" | "cam" | "screen";
+export const ALL_DEVICES: Device[] = ["mic", "cam", "screen"];
 export type DeviceState = "off" | "starting" | "on";
-export type DeviceError = "denied" | "not_found" | "in_use" | "insecure" | "other";
+export type DeviceError =
+  | "denied"
+  /** Bloqueado pelo sistema operacional (ex.: macOS sem permissão de Gravação de Tela). */
+  | "system_denied"
+  | "not_found"
+  | "in_use"
+  | "insecure"
+  /** O navegador não tem a função (ex.: compartilhar tela no celular). */
+  | "unsupported"
+  | "other";
 
-const DEVICES: Record<Device, { slot: Slot; constraints: MediaStreamConstraints }> = {
+interface DeviceConfig {
+  slot: Slot;
+  supported(): boolean;
+  acquire(): Promise<MediaStream>;
+}
+
+const DEVICES: Record<Device, DeviceConfig> = {
   mic: {
     slot: "audio",
-    constraints: { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } },
+    supported: () => !!navigator.mediaDevices?.getUserMedia,
+    acquire: () =>
+      navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      }),
   },
   cam: {
     slot: "camera",
+    supported: () => !!navigator.mediaDevices?.getUserMedia,
     // Resolução modesta: cada pessoa envia até 5 cópias do vídeo.
-    constraints: { video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } } },
+    acquire: () =>
+      navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } },
+      }),
+  },
+  screen: {
+    slot: "screen",
+    supported: () => !!navigator.mediaDevices?.getDisplayMedia,
+    acquire: async () => {
+      // O seletor do navegador oferece tela inteira, janela de um app ou aba.
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { ideal: 30, max: 30 } },
+        audio: false,
+        // Não oferecer a própria aba do Telão (efeito espelho infinito).
+        selfBrowserSurface: "exclude",
+        surfaceSwitching: "include",
+        monitorTypeSurfaces: "include",
+      } as DisplayMediaStreamOptions);
+      // Jogos: prioriza fluidez em vez de nitidez quando falta banda.
+      const track = stream.getVideoTracks()[0];
+      if (track && "contentHint" in track) track.contentHint = "motion";
+      return stream;
+    },
   },
 };
 
 function classify(err: unknown): DeviceError {
   const name = err instanceof DOMException || err instanceof Error ? err.name : "";
+  const message = err instanceof Error || err instanceof DOMException ? err.message : "";
+  if (name === "NotAllowedError" && /system/i.test(message)) return "system_denied";
   if (name === "NotAllowedError" || name === "SecurityError") return "denied";
   if (name === "NotFoundError" || name === "OverconstrainedError") return "not_found";
   if (name === "NotReadableError" || name === "AbortError") return "in_use";
@@ -41,12 +86,12 @@ interface Options {
  * WebRTC e expõe o que chega de cada pessoa.
  */
 export function useMedia({ connection, selfId, participants }: Options) {
-  const [state, setState] = useState<Record<Device, DeviceState>>({ mic: "off", cam: "off" });
-  const [errors, setErrors] = useState<Record<Device, DeviceError | null>>({ mic: null, cam: null });
+  const [state, setState] = useState<Record<Device, DeviceState>>({ mic: "off", cam: "off", screen: "off" });
+  const [errors, setErrors] = useState<Record<Device, DeviceError | null>>({ mic: null, cam: null, screen: null });
   const [remote, setRemote] = useState<RemoteMedia>({});
-  const [localCamera, setLocalCamera] = useState<MediaStream | null>(null);
+  const [local, setLocal] = useState<Record<Device, MediaStream | null>>({ mic: null, cam: null, screen: null });
   const mesh = useRef<PeerMesh | null>(null);
-  const tracks = useRef<Record<Device, MediaStreamTrack | null>>({ mic: null, cam: null });
+  const tracks = useRef<Record<Device, MediaStreamTrack | null>>({ mic: null, cam: null, screen: null });
   /** Sinalização que chegou antes da malha existir (logo após entrar). */
   const pending = useRef<Array<[string, SignalData]>>([]);
   const participantsRef = useRef(participants);
@@ -77,12 +122,12 @@ export function useMedia({ connection, selfId, participants }: Options) {
     return () => {
       m.close();
       mesh.current = null;
-      for (const d of ["mic", "cam"] as const) {
+      for (const d of ALL_DEVICES) {
         tracks.current[d]?.stop();
         tracks.current[d] = null;
       }
-      setState({ mic: "off", cam: "off" });
-      setLocalCamera(null);
+      setState({ mic: "off", cam: "off", screen: "off" });
+      setLocal({ mic: null, cam: null, screen: null });
       setRemote({});
     };
   }, [connection, selfId]);
@@ -104,7 +149,7 @@ export function useMedia({ connection, selfId, participants }: Options) {
       tracks.current[device] = null;
       mesh.current?.setTrack(DEVICES[device].slot, null);
       connection?.send({ type: device, on: false });
-      if (device === "cam") setLocalCamera(null);
+      setLocal((l) => ({ ...l, [device]: null }));
       setDevice(device, "off");
     },
     [connection],
@@ -112,24 +157,25 @@ export function useMedia({ connection, selfId, participants }: Options) {
 
   const turnOn = useCallback(
     async (device: Device) => {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setError(device, "insecure");
+      if (!DEVICES[device].supported()) {
+        setError(device, window.isSecureContext === false ? "insecure" : "unsupported");
         return;
       }
       setDevice(device, "starting");
       try {
-        const stream = await navigator.mediaDevices.getUserMedia(DEVICES[device].constraints);
+        const stream = await DEVICES[device].acquire();
         const track = stream.getTracks()[0];
         if (!mesh.current) {
           track.stop(); // saiu da sala enquanto esperava a permissão
           return;
         }
         tracks.current[device] = track;
-        // Dispositivo desconectado / permissão revogada no meio da conversa.
+        // Dispositivo desconectado, permissão revogada ou — na tela — o botão
+        // nativo "Parar compartilhamento" do navegador.
         track.addEventListener("ended", () => tracks.current[device] === track && turnOff(device));
         mesh.current.setTrack(DEVICES[device].slot, track);
         connection?.send({ type: device, on: true });
-        if (device === "cam") setLocalCamera(stream);
+        setLocal((l) => ({ ...l, [device]: stream }));
         setError(device, null);
         setDevice(device, "on");
       } catch (err) {
@@ -149,13 +195,12 @@ export function useMedia({ connection, selfId, participants }: Options) {
   );
 
   return {
-    mic: state.mic,
-    cam: state.cam,
+    state,
     errors,
     dismissError: (device: Device) => setError(device, null),
     toggle,
     remote,
-    localCamera,
+    local,
     handleSignal,
   };
 }

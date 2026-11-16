@@ -184,6 +184,17 @@ describe("voz: estado do microfone e sinalização", () => {
     expect(joined.participants.every((p) => p.micOn === false && p.camOn === false)).toBe(true);
   });
 
+  it("compartilhar/parar a tela é repassado a todos", async () => {
+    const { ana, bia, anaId } = await twoInRoom();
+    expect((await bia.waitFor(isJoined)).participants.every((p) => p.screenOn === false)).toBe(true);
+    const anaIs = (screenOn: boolean) => (m: ServerMessage): m is Extract<ServerMessage, { type: "participants" }> =>
+      m.type === "participants" && m.participants.some((p) => p.id === anaId && p.screenOn === screenOn && !p.camOn);
+    ana.ws.send(JSON.stringify({ type: "screen", on: true }));
+    await bia.waitFor(anaIs(true));
+    ana.ws.send(JSON.stringify({ type: "screen", on: false }));
+    await bia.waitFor(anaIs(false));
+  });
+
   it("ligar/desligar a câmera é repassado a todos, sem mexer no microfone", async () => {
     const { ana, bia, anaId } = await twoInRoom();
     const anaIs = (camOn: boolean) => (m: ServerMessage): m is Extract<ServerMessage, { type: "participants" }> =>

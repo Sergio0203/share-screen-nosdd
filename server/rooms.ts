@@ -51,7 +51,7 @@ export class RoomStore {
     const room = this.get(roomId);
     if (!room) return { ok: false, reason: "room_not_found" };
     if (room.participants.size >= MAX_PARTICIPANTS) return { ok: false, reason: "room_full" };
-    const participant: Participant = { id: randomUUID(), name, micOn: false, camOn: false };
+    const participant: Participant = { id: randomUUID(), name, micOn: false, camOn: false, screenOn: false };
     room.participants.set(participant.id, participant);
     room.lastActiveAt = this.now();
     return { ok: true, participant };
@@ -63,7 +63,7 @@ export class RoomStore {
     room.lastActiveAt = this.now();
   }
 
-  setDevice(roomId: string, participantId: string, device: "micOn" | "camOn", on: boolean): void {
+  setDevice(roomId: string, participantId: string, device: "micOn" | "camOn" | "screenOn", on: boolean): void {
     const participant = this.rooms.get(roomId)?.participants.get(participantId);
     if (participant) participant[device] = on;
   }

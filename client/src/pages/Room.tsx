@@ -4,10 +4,10 @@ import { MAX_NAME_LENGTH, MAX_PARTICIPANTS, normalizeName, type Participant } fr
 import { getRoom, roomUrl } from "../api";
 import { copyText } from "../clipboard";
 import { DeviceErrorNotice } from "../components/DeviceErrorNotice";
-import { CamIcon, CamOffIcon, MicIcon, MicOffIcon } from "../components/icons";
+import { CamIcon, CamOffIcon, MicIcon, MicOffIcon, ScreenIcon } from "../components/icons";
 import { RemoteAudio, unlockRemoteAudio } from "../components/RemoteAudio";
-import { VideoTile } from "../components/VideoTile";
-import { useMedia, type Device, type DeviceState } from "../media/useMedia";
+import { Stage } from "../components/Stage";
+import { ALL_DEVICES, useMedia, type Device, type DeviceState } from "../media/useMedia";
 import { joinRoom, type ConnectionEvent, type RoomConnection } from "../roomConnection";
 import type { JustCreatedState } from "./Home";
 
@@ -228,7 +228,7 @@ export function Room() {
           para mandar para a galera.
         </p>
       )}
-      {(["mic", "cam"] as const).map(
+      {ALL_DEVICES.map(
         (d) =>
           media.errors[d] && (
             <DeviceErrorNotice key={d} device={d} error={media.errors[d]} onDismiss={() => media.dismissError(d)} />
@@ -286,25 +286,21 @@ export function Room() {
             </form>
           )}
 
-          {inRoom && (() => {
-            const self = inRoom.participants.find((p) => p.id === inRoom.selfId);
-            const videos = inRoom.participants.filter(
-              (p) => p.id !== inRoom.selfId && p.camOn && media.remote[p.id]?.camera,
-            );
-            if (!media.localCamera && videos.length === 0) return <p className="muted">Você está na sala.</p>;
-            return (
-              <div className="tiles">
-                {media.localCamera && <VideoTile stream={media.localCamera} name={self?.name ?? name} self />}
-                {videos.map((p) => (
-                  <VideoTile key={p.id} stream={media.remote[p.id]!.camera!} name={p.name} />
-                ))}
-              </div>
-            );
-          })()}
+          {inRoom && (
+            <Stage
+              selfId={inRoom.selfId}
+              selfName={inRoom.participants.find((p) => p.id === inRoom.selfId)?.name ?? name}
+              participants={inRoom.participants}
+              remote={media.remote}
+              localCamera={media.local.cam}
+              localScreen={media.local.screen}
+            />
+          )}
           {inRoom && (
             <div className="controls">
-              <DeviceButton device="mic" state={media.mic} onClick={() => media.toggle("mic")} />
-              <DeviceButton device="cam" state={media.cam} onClick={() => media.toggle("cam")} />
+              {ALL_DEVICES.map((d) => (
+                <DeviceButton key={d} device={d} state={media.state[d]} onClick={() => media.toggle(d)} />
+              ))}
             </div>
           )}
 
@@ -354,6 +350,11 @@ export function Room() {
                     >
                       {p.camOn ? <CamIcon size={16} /> : <CamOffIcon size={16} />}
                     </span>
+                    {p.screenOn && (
+                      <span className="mic-status is-on" role="img" aria-label="compartilhando a tela" title="Compartilhando a tela">
+                        <ScreenIcon size={16} />
+                      </span>
+                    )}
                   </span>
                 </li>
               ))}
@@ -378,11 +379,12 @@ export function Room() {
 const BUTTON_TEXT: Record<Device, { on: string; off: string }> = {
   mic: { on: "Desligar microfone", off: "Ligar microfone" },
   cam: { on: "Desligar câmera", off: "Ligar câmera" },
+  screen: { on: "Parar compartilhamento", off: "Compartilhar tela" },
 };
 
 function DeviceButton({ device, state, onClick }: { device: Device; state: DeviceState; onClick(): void }) {
   const on = state === "on";
-  const Icon = device === "mic" ? (on ? MicIcon : MicOffIcon) : on ? CamIcon : CamOffIcon;
+  const Icon = device === "mic" ? (on ? MicIcon : MicOffIcon) : device === "cam" ? (on ? CamIcon : CamOffIcon) : ScreenIcon;
   return (
     <button
       className={`btn btn-control ${on ? "is-on" : ""}`}
@@ -392,7 +394,9 @@ function DeviceButton({ device, state, onClick }: { device: Device; state: Devic
       aria-label={on ? BUTTON_TEXT[device].on : BUTTON_TEXT[device].off}
     >
       <Icon />
-      <span aria-hidden>{on ? BUTTON_TEXT[device].on : state === "starting" ? "Ligando…" : BUTTON_TEXT[device].off}</span>
+      <span aria-hidden>
+        {on ? BUTTON_TEXT[device].on : state === "starting" ? (device === "screen" ? "Escolhendo…" : "Ligando…") : BUTTON_TEXT[device].off}
+      </span>
     </button>
   );
 }

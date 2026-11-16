@@ -70,6 +70,9 @@ class FakeMediaStream {
   getTracks() {
     return this.tracks;
   }
+  getVideoTracks() {
+    return this.tracks;
+  }
 }
 interface FakeTransceiver {
   direction: string;
@@ -112,7 +115,11 @@ class FakePeerConnection {
   async setRemoteDescription(d: { type: string }) {
     // Uma oferta remota cria o canal de áudio do lado que responde.
     if (d.type === "offer" && this.transceivers.length === 0) {
-      this.transceivers.push(fakeTransceiver("recvonly", "audio"), fakeTransceiver("recvonly", "video"));
+      this.transceivers.push(
+        fakeTransceiver("recvonly", "audio"),
+        fakeTransceiver("recvonly", "video"),
+        fakeTransceiver("recvonly", "video"),
+      );
     }
   }
   async addIceCandidate() {}
@@ -138,6 +145,14 @@ function mockGetUserMedia(impl: (c?: MediaStreamConstraints) => Promise<unknown>
   return getUserMedia;
 }
 
+/** getDisplayMedia falso (ou ausente, com null, como no celular). */
+function mockGetDisplayMedia(impl: (() => Promise<unknown>) | null) {
+  const getDisplayMedia = impl ? vi.fn(impl) : undefined;
+  const getUserMedia = vi.fn(async () => new FakeMediaStream([fakeMicTrack()]));
+  Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia, getDisplayMedia }, configurable: true });
+  return getDisplayMedia;
+}
+
 function mockClipboard(impl: { write?: unknown; writeText?: unknown }) {
   Object.defineProperty(navigator, "clipboard", { value: impl, configurable: true });
 }
@@ -151,7 +166,7 @@ function renderAt(path: string) {
 }
 
 const people = (...names: string[]): Participant[] =>
-  names.map((name, i) => ({ id: `id-${i}`, name, micOn: false, camOn: false }));
+  names.map((name, i) => ({ id: `id-${i}`, name, micOn: false, camOn: false, screenOn: false }));
 
 async function enterAs(name: string) {
   const input = await screen.findByLabelText("Seu nome");
@@ -285,7 +300,7 @@ describe("Entrar na sala pelo link", () => {
     ws.serverSends({ type: "participants", participants: people("Ana", "Bia", "Caio") });
     expect(within(list).getByText("Caio")).toBeInTheDocument();
 
-    ws.serverSends({ type: "participants", participants: [{ id: "id-1", name: "Bia", micOn: false, camOn: false }] });
+    ws.serverSends({ type: "participants", participants: [{ id: "id-1", name: "Bia", micOn: false, camOn: false, screenOn: false }] });
     expect(within(list).queryByText("Ana")).not.toBeInTheDocument();
     expect(list).toHaveTextContent("(1/6)");
   });
@@ -338,7 +353,7 @@ describe("Conversar por voz", () => {
     ws.serverSends({
       type: "joined",
       selfId: "me",
-      participants: [{ id: "me", name: "Ana", micOn: false, camOn: false }, ...others],
+      participants: [{ id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false }, ...others],
     });
     await screen.findByText("Você está na sala.");
     return ws;
@@ -359,7 +374,7 @@ describe("Conversar por voz", () => {
     const track = fakeMicTrack();
     mockGetUserMedia(async () => new FakeMediaStream([track]));
     // "me" < "zoe": eu sou quem oferece, a conexão nasce assim que ela aparece.
-    const ws = await inRoomWith({ id: "zoe", name: "Zoe", micOn: false, camOn: false });
+    const ws = await inRoomWith({ id: "zoe", name: "Zoe", micOn: false, camOn: false, screenOn: false });
     expect(FakePeerConnection.instances).toHaveLength(1);
     const [audio, camera] = FakePeerConnection.instances[0].transceivers;
     expect(audio.direction).toBe("sendrecv");
@@ -382,7 +397,7 @@ describe("Conversar por voz", () => {
 
   it("todos veem quem está com o microfone ligado ou desligado", async () => {
     mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
-    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true, camOn: false }, { id: "caio", name: "Caio", micOn: false, camOn: false });
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true, camOn: false, screenOn: false }, { id: "caio", name: "Caio", micOn: false, camOn: false, screenOn: false });
     const list = screen.getByRole("complementary", { name: "Participantes" });
     const row = (name: string) => within(list).getByText(name).closest("li")!;
 
@@ -392,9 +407,9 @@ describe("Conversar por voz", () => {
     ws.serverSends({
       type: "participants",
       participants: [
-        { id: "me", name: "Ana", micOn: false, camOn: false },
-        { id: "bia", name: "Bia", micOn: false, camOn: false },
-        { id: "caio", name: "Caio", micOn: true, camOn: false },
+        { id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false },
+        { id: "bia", name: "Bia", micOn: false, camOn: false, screenOn: false },
+        { id: "caio", name: "Caio", micOn: true, camOn: false, screenOn: false },
       ],
     });
     expect(within(row("Bia")).getByRole("img", { name: "microfone desligado" })).toBeInTheDocument();
@@ -419,8 +434,8 @@ describe("Conversar por voz", () => {
     ws.serverSends({
       type: "participants",
       participants: [
-        { id: "me", name: "Ana", micOn: false, camOn: false },
-        { id: "bia", name: "Bia", micOn: true, camOn: false },
+        { id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false },
+        { id: "bia", name: "Bia", micOn: true, camOn: false, screenOn: false },
       ],
     });
     expect(screen.getByText("Bia")).toBeInTheDocument();
@@ -439,7 +454,7 @@ describe("Conversar por voz", () => {
   it("toca o áudio que chega de outra pessoa e para quando ela sai", async () => {
     mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
     HTMLMediaElement.prototype.play = vi.fn(async () => {});
-    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true, camOn: false });
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: true, camOn: false, screenOn: false });
 
     // "bia" < "me": a Bia oferece; a conexão só nasce quando a oferta chega.
     expect(FakePeerConnection.instances).toHaveLength(0);
@@ -454,7 +469,7 @@ describe("Conversar por voz", () => {
     expect(audio).not.toBeNull();
     expect((audio.srcObject as unknown as FakeMediaStream).tracks).toEqual([remoteTrack]);
 
-    ws.serverSends({ type: "participants", participants: [{ id: "me", name: "Ana", micOn: false, camOn: false }] });
+    ws.serverSends({ type: "participants", participants: [{ id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false }] });
     expect(document.querySelector("audio[data-remote-audio]")).toBeNull();
     expect(FakePeerConnection.instances[0].closed).toBe(true);
   });
@@ -473,7 +488,7 @@ describe("Ativar a webcam", () => {
     ws.serverSends({
       type: "joined",
       selfId: "me",
-      participants: [{ id: "me", name: "Ana", micOn: false, camOn: false }, ...others],
+      participants: [{ id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false }, ...others],
     });
     await screen.findByText("Você está na sala.");
     return ws;
@@ -492,7 +507,7 @@ describe("Ativar a webcam", () => {
   it("o botão liga e desliga a câmera, mostra o próprio vídeo e avisa o servidor", async () => {
     const track = Object.assign(fakeMicTrack(), { kind: "video" });
     const getUserMedia = mockGetUserMedia(async () => new FakeMediaStream([track]));
-    const ws = await inRoomWith({ id: "zoe", name: "Zoe", micOn: false, camOn: false });
+    const ws = await inRoomWith({ id: "zoe", name: "Zoe", micOn: false, camOn: false, screenOn: false });
     const camera = FakePeerConnection.instances[0].transceivers[1];
 
     await userEvent.click(camButton());
@@ -514,7 +529,7 @@ describe("Ativar a webcam", () => {
 
   it("todos veem o vídeo de quem ligou a câmera, com o nome; some quando ela desliga", async () => {
     mockGetUserMedia(async () => new FakeMediaStream([fakeMicTrack()]));
-    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: false, camOn: false });
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: false, camOn: false, screenOn: false });
     ws.serverSends({ type: "signal", from: "bia", data: { description: { type: "offer", sdp: "x" } } });
     await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
     const pc = FakePeerConnection.instances[0];
@@ -524,8 +539,8 @@ describe("Ativar a webcam", () => {
     expect(screen.queryByRole("figure")).not.toBeInTheDocument();
 
     const bia = (camOn: boolean): Participant[] => [
-      { id: "me", name: "Ana", micOn: false, camOn: false },
-      { id: "bia", name: "Bia", micOn: false, camOn },
+      { id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false },
+      { id: "bia", name: "Bia", micOn: false, camOn, screenOn: false },
     ];
     ws.serverSends({ type: "participants", participants: bia(true) });
     const tile = screen.getByRole("figure", { name: "Câmera de Bia" });
@@ -564,5 +579,156 @@ describe("Ativar a webcam", () => {
     await inRoomWith();
     await userEvent.click(camButton());
     expect(await screen.findByRole("alert")).toHaveTextContent("Não deu para usar a câmera.");
+  });
+});
+
+describe("Compartilhar a tela", () => {
+  beforeEach(() => {
+    mockClipboard({});
+    HTMLMediaElement.prototype.play = vi.fn(async () => {});
+  });
+
+  const ana = { id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false };
+
+  async function inRoomWith(...others: Participant[]) {
+    renderAt(`/sala/${ROOM_ID}`);
+    await enterAs("Ana");
+    const ws = lastSocket();
+    ws.serverSends({ type: "joined", selfId: "me", participants: [ana, ...others] });
+    await screen.findByText("Você está na sala.");
+    return ws;
+  }
+  const shareButton = () => screen.getByRole("button", { name: /Compartilhar tela|Parar compartilhamento/ });
+  const screenTrack = () => Object.assign(fakeMicTrack(), { kind: "video", contentHint: "" });
+
+  it("o botão compartilha a tela, avisa o servidor e mostra que está compartilhando", async () => {
+    const track = screenTrack();
+    const getDisplayMedia = mockGetDisplayMedia(async () => new FakeMediaStream([track]));
+    const ws = await inRoomWith({ id: "zoe", name: "Zoe", micOn: false, camOn: false, screenOn: false });
+    const screenSlot = FakePeerConnection.instances[0].transceivers[2];
+    expect(shareButton()).toHaveAccessibleName("Compartilhar tela");
+
+    await userEvent.click(shareButton());
+    // Sem forçar tela inteira: o seletor do navegador oferece tela, janela ou aba.
+    expect(getDisplayMedia).toHaveBeenCalledWith(expect.objectContaining({ video: expect.anything(), audio: false }));
+    expect(await screen.findByRole("button", { name: "Parar compartilhamento" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Você está compartilhando a tela.")).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: "Sua tela" })).toBeInTheDocument();
+    expect(ws.sent).toContainEqual({ type: "screen", on: true });
+    await vi.waitFor(() => expect(screenSlot.sender.track).toBe(track));
+    expect(track.contentHint).toBe("motion");
+    // Câmera e microfone não foram mexidos.
+    expect(FakePeerConnection.instances[0].transceivers[1].sender.track).toBeNull();
+
+    await userEvent.click(shareButton());
+    expect(shareButton()).toHaveAccessibleName("Compartilhar tela");
+    expect(ws.sent.at(-1)).toEqual({ type: "screen", on: false });
+    expect(track.stopped).toBe(true);
+    expect(screen.queryByText("Você está compartilhando a tela.")).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(screenSlot.sender.track).toBeNull());
+  });
+
+  it("parar pelo botão nativo do navegador também encerra para todos", async () => {
+    const track = screenTrack();
+    mockGetDisplayMedia(async () => new FakeMediaStream([track]));
+    const ws = await inRoomWith();
+    await userEvent.click(shareButton());
+    await screen.findByRole("button", { name: "Parar compartilhamento" });
+
+    // O botão nativo "Parar compartilhamento" encerra a trilha e dispara "ended".
+    act(() => {
+      track.dispatchEvent(new Event("ended"));
+    });
+    expect(shareButton()).toHaveAccessibleName("Compartilhar tela");
+    expect(ws.sent.at(-1)).toEqual({ type: "screen", on: false });
+    expect(screen.queryByRole("figure", { name: "Sua tela" })).not.toBeInTheDocument();
+  });
+
+  it("os outros veem a tela em destaque, com tela cheia; some quando para", async () => {
+    mockGetDisplayMedia(async () => new FakeMediaStream([screenTrack()]));
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: false, camOn: true, screenOn: false });
+    ws.serverSends({ type: "signal", from: "bia", data: { description: { type: "offer", sdp: "x" } } });
+    await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
+    const pc = FakePeerConnection.instances[0];
+    act(() => {
+      pc.ontrack!({ track: { kind: "video" }, transceiver: pc.transceivers[1] });
+      pc.ontrack!({ track: { kind: "video" }, transceiver: pc.transceivers[2] });
+    });
+    expect(screen.queryByRole("figure", { name: "Tela de Bia" })).not.toBeInTheDocument();
+
+    const bia = (screenOn: boolean): Participant[] => [ana, { id: "bia", name: "Bia", micOn: false, camOn: true, screenOn }];
+    ws.serverSends({ type: "participants", participants: bia(true) });
+    const view = screen.getByRole("figure", { name: "Tela de Bia" });
+    expect(view).toHaveClass("screen-view");
+    // A câmera dela continua aparecendo, menor.
+    expect(screen.getByRole("figure", { name: "Câmera de Bia" }).parentElement).toHaveClass("tiles-small");
+    expect(within(screen.getByRole("complementary")).getByRole("img", { name: "compartilhando a tela" })).toBeInTheDocument();
+
+    view.requestFullscreen = vi.fn(async () => {});
+    await userEvent.click(within(view).getByRole("button", { name: "Tela cheia" }));
+    expect(view.requestFullscreen).toHaveBeenCalled();
+
+    ws.serverSends({ type: "participants", participants: bia(false) });
+    expect(screen.queryByRole("figure", { name: "Tela de Bia" })).not.toBeInTheDocument();
+  });
+
+  it("com duas telas compartilhadas, dá para escolher qual ver em destaque", async () => {
+    mockGetDisplayMedia(async () => new FakeMediaStream([screenTrack()]));
+    const ws = await inRoomWith(
+      { id: "bia", name: "Bia", micOn: false, camOn: false, screenOn: true },
+      { id: "caio", name: "Caio", micOn: false, camOn: false, screenOn: true },
+    );
+    for (const from of ["bia", "caio"]) {
+      ws.serverSends({ type: "signal", from, data: { description: { type: "offer", sdp: "x" } } });
+    }
+    await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(2));
+    act(() => {
+      for (const pc of FakePeerConnection.instances) pc.ontrack!({ track: { kind: "video" }, transceiver: pc.transceivers[2] });
+    });
+    expect(screen.getByRole("figure", { name: "Tela de Bia" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Ver tela de Caio" }));
+    expect(screen.getByRole("figure", { name: "Tela de Caio" })).toBeInTheDocument();
+    expect(screen.queryByRole("figure", { name: "Tela de Bia" })).not.toBeInTheDocument();
+  });
+
+  it("permissão negada explica e a pessoa continua podendo assistir", async () => {
+    mockGetDisplayMedia(async () => {
+      throw new DOMException("Permission denied", "NotAllowedError");
+    });
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: false, camOn: false, screenOn: false });
+    await userEvent.click(shareButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("A tela não foi compartilhada.");
+    expect(alert).toHaveTextContent(/cadeado/);
+    expect(alert).toHaveTextContent(/pode assistir/);
+    expect(shareButton()).toHaveAccessibleName("Compartilhar tela");
+    expect(ws.sent).not.toContainEqual({ type: "screen", on: true });
+
+    // Ainda assiste a tela de outra pessoa.
+    ws.serverSends({ type: "signal", from: "bia", data: { description: { type: "offer", sdp: "x" } } });
+    await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
+    const pc = FakePeerConnection.instances[0];
+    act(() => pc.ontrack!({ track: { kind: "video" }, transceiver: pc.transceivers[2] }));
+    ws.serverSends({ type: "participants", participants: [ana, { id: "bia", name: "Bia", micOn: false, camOn: false, screenOn: true }] });
+    expect(screen.getByRole("figure", { name: "Tela de Bia" })).toBeInTheDocument();
+  });
+
+  it("bloqueio do sistema (macOS) explica onde liberar", async () => {
+    mockGetDisplayMedia(async () => {
+      throw new DOMException("Permission denied by system", "NotAllowedError");
+    });
+    await inRoomWith();
+    await userEvent.click(shareButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Gravação de Tela/);
+  });
+
+  it("navegador sem compartilhamento de tela (celular) explica e não quebra", async () => {
+    mockGetDisplayMedia(null);
+    await inRoomWith();
+    await userEvent.click(shareButton());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Este navegador não permite compartilhar a tela.");
+    expect(alert).toHaveTextContent(/computador/);
+    expect(shareButton()).toHaveAccessibleName("Compartilhar tela");
   });
 });

@@ -35,3 +35,7 @@ npm start          # serve o build + API em http://localhost:3000 (PORT=xxxx par
 > Conexão entre pessoas usa só STUN público (sem TURN). Em redes muito restritivas
 > (algumas corporativas / 4G com CGNAT simétrico) o áudio pode não conectar; a
 > solução é adicionar um servidor TURN em `client/src/media/peerMesh.ts`.
+
+> **Jogos:** ao compartilhar só a janela de um jogo em *tela cheia exclusiva*, o
+> vídeo pode sair preto (limitação do sistema/navegador). Use o modo **janela sem
+> bordas** no jogo, ou compartilhe a tela inteira.
