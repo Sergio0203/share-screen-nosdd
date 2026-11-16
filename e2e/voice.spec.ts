@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createRoom, enter, FAKE_MEDIA, DENY_MEDIA, launch, newPage, statusIcons } from "./helpers";
+import { createRoom, enter, FAKE_MEDIA, DENY_MEDIA, launch, newPage, statusIcons, turnOn } from "./helpers";
 
 /**
  * Voz de ponta a ponta em Chromium real. O microfone falso do Chrome gera
@@ -53,13 +53,13 @@ test("quem liga o microfone é ouvido pelos outros; todos veem o estado", async 
   expect(await incomingLevel(bia)).toBeLessThan(0.001);
 
   // Ana liga: Bia vê o ícone e ouve.
-  await ana.getByRole("button", { name: "Ligar microfone" }).click();
+  await turnOn(ana, "mic");
   await expect(ana.getByRole("button", { name: "Desligar microfone" })).toBeVisible();
   await expect(micStatus(bia, "Ana")).toHaveAccessibleName("microfone ligado", { timeout: 3000 });
   await expect.poll(() => incomingLevel(bia), { timeout: 10_000 }).toBeGreaterThan(0.01);
 
   // Bia também liga: os dois se ouvem.
-  await bia.getByRole("button", { name: "Ligar microfone" }).click();
+  await turnOn(bia, "mic");
   // Os 3 s contam a partir do microfone ligado (o getUserMedia pode demorar com muitos navegadores abertos).
   await expect(bia.getByRole("button", { name: "Desligar microfone" })).toBeVisible();
   await expect(micStatus(ana, "Bia")).toHaveAccessibleName("microfone ligado", { timeout: 3000 });
@@ -71,7 +71,7 @@ test("quem liga o microfone é ouvido pelos outros; todos veem o estado", async 
   await expect.poll(() => incomingLevel(bia), { timeout: 5000 }).toBeLessThan(0.001);
 
   // E religa sem problema.
-  await ana.getByRole("button", { name: "Ligar microfone" }).click();
+  await turnOn(ana, "mic");
   await expect.poll(() => incomingLevel(bia), { timeout: 10_000 }).toBeGreaterThan(0.01);
 });
 
@@ -80,7 +80,7 @@ test("quem entra depois ouve quem já estava com o microfone ligado", async () =
   const bia = await newPage(FAKE_MEDIA);
   const url = await createRoom(ana);
   await enter(ana, "Ana");
-  await ana.getByRole("button", { name: "Ligar microfone" }).click();
+  await turnOn(ana, "mic");
   await expect(ana.getByRole("button", { name: "Desligar microfone" })).toBeVisible();
 
   await bia.goto(url);
@@ -106,7 +106,7 @@ test("permissão negada mostra como liberar e a pessoa continua ouvindo a sala",
   await expect(micStatus(ana, "Bia")).toHaveAccessibleName("microfone desligado");
 
   // O resto funciona: Bia ainda ouve a Ana.
-  await ana.getByRole("button", { name: "Ligar microfone" }).click();
+  await turnOn(ana, "mic");
   await expect(micStatus(bia, "Ana")).toHaveAccessibleName("microfone ligado", { timeout: 3000 });
   await expect.poll(() => incomingLevel(bia), { timeout: 10_000 }).toBeGreaterThan(0.01);
 });
@@ -152,7 +152,7 @@ test("6 pessoas ligando o microfone ao mesmo tempo: todas ouvem as outras 5", as
   await expect(pages[0].getByText("(6/6)")).toBeVisible();
 
   // Todos clicam praticamente juntos: força colisão de negociações.
-  await Promise.all(pages.map((p) => p.getByRole("button", { name: "Ligar microfone" }).click()));
+  await Promise.all(pages.map((p) => turnOn(p, "mic")));
 
   for (const page of pages) {
     await expect.poll(() => audibleCount(page), { timeout: 20_000 }).toBe(5);

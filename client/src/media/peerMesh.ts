@@ -22,6 +22,14 @@ export const SLOTS = [
 ] as const;
 export type Slot = (typeof SLOTS)[number]["name"];
 
+/**
+ * Ao começar a enviar, o encoder parte em resolução cheia por alguns segundos
+ * e só depois adota a política do perfil (ex.: manter fps). Sem isso, no lado
+ * que respondeu à oferta, o Chrome começava a tela em 720p e só subia para
+ * 1080p depois de ~10 s.
+ */
+const STARTUP_BOOST_MS = 3000;
+
 /** Limites de envio padrão por canal (por cópia; cada pessoa envia até 5). */
 const DEFAULT_SEND_PARAMS: Partial<Record<Slot, SendParams>> = {
   camera: { maxBitrate: 500_000 },
@@ -65,6 +73,7 @@ export class PeerMesh {
   private peers = new Map<string, Peer>();
   private local: Record<Slot, MediaStreamTrack | null> = { audio: null, camera: null, screen: null };
   private params: Partial<Record<Slot, SendParams>> = { ...DEFAULT_SEND_PARAMS };
+  private boostTimers = new Set<ReturnType<typeof setTimeout>>();
   private closed = false;
 
   constructor(private readonly opts: PeerMeshOptions) {}
@@ -84,18 +93,33 @@ export class PeerMesh {
   /** Começa (track) ou para (null) de enviar num canal para todos. */
   setTrack(slot: Slot, track: MediaStreamTrack | null): void {
     this.local[slot] = track;
-    for (const peer of this.peers.values()) this.applyTrack(peer, slot);
+    for (const peer of this.peers.values()) {
+      this.applyTrack(peer, slot);
+      if (track) void this.applyParams(peer, slot);
+    }
   }
 
   /** Muda banda/fps máximos enviados num canal, em todas as conexões (sem renegociar). */
   setSendParams(slot: Slot, params: SendParams): Promise<void> {
     this.params[slot] = params;
-    return Promise.all(
-      [...this.peers.values()].map((peer) => {
-        const t = peer.transceivers[slot];
-        return t ? applySendParams(t.sender, params) : undefined;
-      }),
-    ).then(() => {});
+    return Promise.all([...this.peers.values()].map((peer) => this.applyParams(peer, slot))).then(() => {});
+  }
+
+  /** Aplica os limites do canal a uma conexão, com a partida em resolução cheia. */
+  private async applyParams(peer: Peer, slot: Slot): Promise<void> {
+    const params = this.params[slot];
+    const sender = peer.transceivers[slot]?.sender;
+    if (!params || !sender) return;
+    const needsBoost = params.degradationPreference && params.degradationPreference !== "maintain-resolution";
+    if (!needsBoost) return applySendParams(sender, params);
+    await applySendParams(sender, { ...params, degradationPreference: "maintain-resolution" });
+    const timer = setTimeout(() => {
+      this.boostTimers.delete(timer);
+      // Usa os limites atuais (podem ter mudado nesse meio-tempo).
+      const current = this.params[slot];
+      if (!this.closed && current && peer.transceivers[slot]?.sender === sender) void applySendParams(sender, current);
+    }, STARTUP_BOOST_MS);
+    this.boostTimers.add(timer);
   }
 
   handleSignal(from: string, data: SignalData): void {
@@ -108,6 +132,8 @@ export class PeerMesh {
 
   close(): void {
     this.closed = true;
+    for (const timer of this.boostTimers) clearTimeout(timer);
+    this.boostTimers.clear();
     for (const id of [...this.peers.keys()]) this.removePeer(id);
   }
 
@@ -192,22 +218,14 @@ export class PeerMesh {
       if (description.type === "answer") {
         // Negociação concluída: aplica os limites completos (sendEncodings não
         // cobre degradationPreference).
-        for (const slot of SLOTS) {
-          const params = this.params[slot.name];
-          const t = peer.transceivers[slot.name];
-          if (params && t) void applySendParams(t.sender, params);
-        }
+        for (const slot of SLOTS) void this.applyParams(peer, slot.name);
       }
       if (description.type === "offer") {
         const adopted = this.adoptRemoteTransceivers(peer);
         await pc.setLocalDescription();
         this.opts.sendSignal(from, { description: pc.localDescription?.toJSON() });
         // Só depois da resposta o navegador tem os parâmetros de envio.
-        for (const slot of adopted) {
-          const params = this.params[slot];
-          const t = peer.transceivers[slot];
-          if (params && t) void applySendParams(t.sender, params);
-        }
+        for (const slot of adopted) void this.applyParams(peer, slot);
       }
     } else if (candidate !== undefined) {
       try {

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createRoom, enter, FAKE_MEDIA, newPage, statusIcons } from "./helpers";
+import { createRoom, enter, FAKE_MEDIA, newPage, statusIcons, turnOn } from "./helpers";
 
 /**
  * Compartilhamento de tela de ponta a ponta em Chromium real. Com
@@ -15,7 +15,8 @@ async function isLive(page: Page, name: string): Promise<boolean> {
   return video.evaluate(async (el: HTMLVideoElement) => {
     const frames = () => el.getVideoPlaybackQuality().totalVideoFrames;
     const before = frames();
-    await new Promise((r) => setTimeout(r, 300));
+    // Até 1 s esperando um quadro novo (com a máquina carregada o fps cai).
+    for (let i = 0; i < 10 && frames() <= before; i++) await new Promise((r) => setTimeout(r, 100));
     return el.videoWidth > 0 && frames() > before;
   });
 }
@@ -63,7 +64,7 @@ async function roomWith(...names: string[]): Promise<Page[]> {
 test("os outros começam a ver em até 5 s; parar pelo botão do app some em até 3 s", async () => {
   const [ana, bia, caio] = await roomWith("Ana", "Bia", "Caio");
 
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "screen");
   const started = Date.now();
   await expect(ana.getByText("Você está compartilhando a tela.")).toBeVisible();
   for (const page of [bia, caio]) {
@@ -79,7 +80,7 @@ test("os outros começam a ver em até 5 s; parar pelo botão do app some em at�
 
 test("parar pelo botão nativo do navegador some para os outros em até 3 s", async () => {
   const [ana, bia] = await roomWith("Ana", "Bia");
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "screen");
   await expect.poll(() => isLive(bia, "Ana"), { timeout: 5000 }).toBe(true);
 
   await clickNativeStop(ana);
@@ -88,14 +89,14 @@ test("parar pelo botão nativo do navegador some para os outros em até 3 s", as
   await expect(ana.getByText("Você está compartilhando a tela.")).toHaveCount(0);
 
   // E dá para compartilhar de novo.
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "screen");
   await expect.poll(() => isLive(bia, "Ana"), { timeout: 5000 }).toBe(true);
 });
 
 test("a tela aparece em destaque, maior que as câmeras, e vai para tela cheia (sai com Esc)", async () => {
   const [ana, bia] = await roomWith("Ana", "Bia");
-  await ana.getByRole("button", { name: "Ligar câmera" }).click();
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "cam");
+  await turnOn(ana, "screen");
   await expect.poll(() => isLive(bia, "Ana"), { timeout: 5000 }).toBe(true);
   const camera = bia.getByRole("figure", { name: "Câmera de Ana" });
   await expect(camera).toBeVisible();
@@ -115,7 +116,7 @@ test("a tela aparece em destaque, maior que as câmeras, e vai para tela cheia (
 
 test("quem entra depois vê a tela que já estava sendo compartilhada", async () => {
   const [ana] = await roomWith("Ana");
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "screen");
   await expect(ana.getByText("Você está compartilhando a tela.")).toBeVisible();
 
   const bia = await newPage(FAKE_MEDIA);
@@ -137,7 +138,7 @@ test("permissão negada explica e a pessoa continua assistindo", async () => {
   await expect(bia.getByRole("alert")).toContainText("A tela não foi compartilhada.");
   await expect(bia.getByRole("button", { name: "Compartilhar tela" })).toBeVisible();
 
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "screen");
   await expect.poll(() => isLive(bia, "Ana"), { timeout: 5000 }).toBe(true);
 });
 
@@ -151,6 +152,6 @@ test("navegador sem compartilhamento de tela (celular) explica e a pessoa contin
   await bia.getByRole("button", { name: "Compartilhar tela" }).click();
   await expect(bia.getByRole("alert")).toContainText("Este navegador não permite compartilhar a tela.");
 
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "screen");
   await expect.poll(() => isLive(bia, "Ana"), { timeout: 5000 }).toBe(true);
 });

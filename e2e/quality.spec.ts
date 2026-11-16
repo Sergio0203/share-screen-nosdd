@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createRoom, enter, FAKE_MEDIA, newPage, screenStats, trackPeerConnections } from "./helpers";
+import { createRoom, enter, FAKE_MEDIA, newPage, screenStats, trackPeerConnections, turnOn } from "./helpers";
 
 /**
  * Qualidade do compartilhamento conferida nas estatísticas do WebRTC (as
@@ -28,6 +28,15 @@ const active = (page: Page) => page.getByText(/Qualidade ativa/);
 
 /** Espera o envio e o recebimento chegarem à resolução esperada. */
 async function expectResolution(ana: Page, bia: Page, width: number, height: number) {
+  try {
+    await waitResolution(ana, bia, width, height);
+  } catch (err) {
+    console.log("envio:", JSON.stringify(await screenStats(ana, "send")), "| recebido:", JSON.stringify(await screenStats(bia, "receive")));
+    throw err;
+  }
+}
+
+async function waitResolution(ana: Page, bia: Page, width: number, height: number) {
   await expect
     .poll(async () => (await screenStats(ana, "send"))?.height, { timeout: 15_000, message: "altura enviada" })
     .toBe(height);
@@ -42,7 +51,7 @@ test("antes de compartilhar há 720p 30, 1080p 30 e 1080p 60; a escolhida é a e
   await expect(picker(ana).getByRole("option")).toHaveText(["720p 30 fps", "1080p 30 fps", "1080p 60 fps"]);
 
   await picker(ana).selectOption({ label: "1080p 60 fps" });
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "screen");
   await expect(active(ana)).toContainText("Qualidade ativa: 1080p 60 fps");
   await expect(active(ana)).toContainText("capturando 1920×1080 a 60 fps");
 
@@ -54,7 +63,7 @@ test("trocar durante o compartilhamento muda resolução e fps enviados, sem par
   test.setTimeout(90_000);
   const { ana, bia } = await sharing();
   await picker(ana).selectOption({ label: "720p 30 fps" });
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "screen");
 
   // 720p 30 fps
   await expect(active(ana)).toContainText("Qualidade ativa: 720p 30 fps · capturando 1280×720 a 30 fps");
@@ -90,7 +99,7 @@ test("trocar durante o compartilhamento muda resolução e fps enviados, sem par
 test("a tela sai na qualidade escolhida logo no começo, sem demorar para sair do borrão", async () => {
   const { ana, bia } = await sharing();
   await picker(ana).selectOption({ label: "1080p 30 fps" });
-  await ana.getByRole("button", { name: "Compartilhar tela" }).click();
+  await turnOn(ana, "screen");
   const started = Date.now();
   await expectResolution(ana, bia, 1920, 1080);
   console.log(`1080p chegou a quem assiste em ${Date.now() - started} ms`);

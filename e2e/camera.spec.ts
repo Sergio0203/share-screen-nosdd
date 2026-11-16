@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createRoom, DENY_MEDIA, enter, FAKE_MEDIA, newPage, statusIcons } from "./helpers";
+import { createRoom, DENY_MEDIA, enter, FAKE_MEDIA, newPage, statusIcons, turnOn } from "./helpers";
 
 /**
  * Câmera de ponta a ponta em Chromium real. A câmera falsa do Chrome gera um
@@ -16,7 +16,8 @@ async function isLive(page: Page, name: string): Promise<boolean> {
   return video.evaluate(async (el: HTMLVideoElement) => {
     const frames = () => el.getVideoPlaybackQuality().totalVideoFrames;
     const before = frames();
-    await new Promise((r) => setTimeout(r, 500));
+    // Até 1 s esperando um quadro novo (com a máquina carregada o fps cai).
+    for (let i = 0; i < 10 && frames() <= before; i++) await new Promise((r) => setTimeout(r, 100));
     return el.videoWidth > 0 && frames() > before;
   });
 }
@@ -39,7 +40,7 @@ test("quem liga a câmera é visto por todos, com o nome; desligar some em até 
   await expect(bia.getByRole("figure")).toHaveCount(0);
 
   // Ana liga: ela se vê, e Bia e Caio veem o vídeo dela com o nome.
-  await ana.getByRole("button", { name: "Ligar câmera" }).click();
+  await turnOn(ana, "cam");
   await expect(ana.getByRole("figure", { name: "Sua câmera" })).toContainText("Ana (você)");
   for (const page of [bia, caio]) {
     await expect(tileOf(page, "Ana")).toContainText("Ana");
@@ -58,7 +59,7 @@ test("quem liga a câmera é visto por todos, com o nome; desligar some em até 
   }
 
   // Religa sem problema.
-  await ana.getByRole("button", { name: "Ligar câmera" }).click();
+  await turnOn(ana, "cam");
   await expect.poll(() => isLive(bia, "Ana"), { timeout: 10_000 }).toBe(true);
 });
 
@@ -70,7 +71,7 @@ test("várias câmeras ao mesmo tempo, e quem entra depois vê quem já estava c
   await bia.goto(url);
   await enter(bia, "Bia");
 
-  await Promise.all([ana, bia].map((p) => p.getByRole("button", { name: "Ligar câmera" }).click()));
+  await Promise.all([ana, bia].map((p) => turnOn(p, "cam")));
   await expect.poll(() => isLive(ana, "Bia"), { timeout: 10_000 }).toBe(true);
   await expect.poll(() => isLive(bia, "Ana"), { timeout: 10_000 }).toBe(true);
 
@@ -103,6 +104,6 @@ test("permissão da câmera negada mostra como liberar e a pessoa continua vendo
   await expect(camStatus(ana, "Bia")).toHaveAccessibleName("câmera desligada");
 
   // O resto funciona: Bia vê a câmera da Ana.
-  await ana.getByRole("button", { name: "Ligar câmera" }).click();
+  await turnOn(ana, "cam");
   await expect.poll(() => isLive(bia, "Ana"), { timeout: 10_000 }).toBe(true);
 });

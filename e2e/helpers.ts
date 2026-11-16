@@ -66,6 +66,8 @@ export interface VideoStats {
   maxFramerate?: number;
   framesSent?: number;
   trackId?: string;
+  /** Só no envio: por que o encoder está limitando (cpu, bandwidth, none). */
+  limitation?: string;
 }
 
 /** Estatísticas do canal de tela (3º canal) na primeira conexão aberta. */
@@ -88,7 +90,21 @@ export async function screenStats(page: Page, side: "send" | "receive"): Promise
       fps: s.framesPerSecond ?? 0,
       maxFramerate: side === "send" ? t.sender.getParameters().encodings[0]?.maxFramerate : undefined,
       framesSent: s.framesSent,
+      limitation: (s as unknown as { qualityLimitationReason?: string }).qualityLimitationReason,
       trackId: side === "send" ? t.sender.track?.id : undefined,
     };
   }, side);
+}
+
+const ON_LABEL = { mic: "Desligar microfone", cam: "Desligar câmera", screen: "Parar compartilhamento" };
+const OFF_LABEL = { mic: "Ligar microfone", cam: "Ligar câmera", screen: "Compartilhar tela" };
+
+/**
+ * Liga microfone/câmera/tela e espera de fato ligar. Os prazos dos requisitos
+ * ("os outros veem em até X s") contam a partir daqui, não do clique: abrir a
+ * captura pode demorar com a máquina carregada.
+ */
+export async function turnOn(page: Page, device: keyof typeof ON_LABEL) {
+  await page.getByRole("button", { name: OFF_LABEL[device] }).click();
+  await expect(page.getByRole("button", { name: ON_LABEL[device] })).toBeVisible({ timeout: 10_000 });
 }

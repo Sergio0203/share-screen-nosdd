@@ -786,7 +786,7 @@ describe("Escolher a qualidade do compartilhamento", () => {
 
   /** Sender falso com getParameters/setParameters, para conferir banda e fps enviados. */
   function trackSendParams() {
-    const sent: RTCRtpEncodingParameters[] = [];
+    const sent: Array<RTCRtpEncodingParameters & { degradationPreference?: string }> = [];
     for (const pc of FakePeerConnection.instances) {
       const sender = pc.transceivers[2].sender as unknown as {
         getParameters(): RTCRtpSendParameters;
@@ -794,7 +794,7 @@ describe("Escolher a qualidade do compartilhamento", () => {
       };
       sender.getParameters = () => ({ encodings: [{}] }) as RTCRtpSendParameters;
       sender.setParameters = async (p) => {
-        sent.push(p.encodings[0]);
+        sent.push({ ...p.encodings[0], degradationPreference: (p as { degradationPreference?: string }).degradationPreference });
       };
     }
     return sent;
@@ -858,6 +858,31 @@ describe("Escolher a qualidade do compartilhamento", () => {
     expect(track.stopped).toBe(false);
     expect(screenSlot.sender.track).toBe(track);
     expect(ws.sent.filter((m) => (m as { type: string }).type === "screen")).toEqual([{ type: "screen", on: true }]);
+  });
+
+  it("cada qualidade tem sua política; começa em resolução cheia e depois adota a do perfil", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const track = fakeScreenTrack();
+    mockGetDisplayMedia(async (opts) => {
+      track.fit(opts?.video as MediaTrackConstraints);
+      return new FakeMediaStream([track]);
+    });
+    await inRoom();
+    const sent = trackSendParams();
+
+    await userEvent.selectOptions(picker(), "1080p 60 fps");
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    await screen.findByText(/Qualidade ativa/);
+    // Partida: resolução cheia (evita começar borrado).
+    expect(sent.at(-1)).toMatchObject({ maxFramerate: 60, degradationPreference: "maintain-resolution" });
+    // Depois: 1080p 60 prioriza fluidez (jogos).
+    await act(() => vi.advanceTimersByTimeAsync(3500));
+    expect(sent.at(-1)).toMatchObject({ maxFramerate: 60, degradationPreference: "maintain-framerate" });
+
+    // 1080p 30 prioriza nitidez o tempo todo.
+    await userEvent.selectOptions(picker(), "1080p 30 fps");
+    await act(() => vi.advanceTimersByTimeAsync(3500));
+    expect(sent.at(-1)).toMatchObject({ maxFramerate: 30, degradationPreference: "maintain-resolution" });
   });
 
   it("se o navegador recusar a troca, avisa e mantém a qualidade anterior", async () => {
