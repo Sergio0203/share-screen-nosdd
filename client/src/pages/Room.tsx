@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { MAX_NAME_LENGTH, MAX_PARTICIPANTS, normalizeName, type Participant } from "../../../shared/protocol";
 import { getRoom, roomUrl } from "../api";
@@ -7,6 +8,8 @@ import { DeviceErrorNotice } from "../components/DeviceErrorNotice";
 import { CamIcon, CamOffIcon, MicIcon, MicOffIcon, ScreenIcon } from "../components/icons";
 import { RemoteAudio, unlockRemoteAudio } from "../components/RemoteAudio";
 import { QualityPicker } from "../components/QualityPicker";
+import { ScreenView } from "../components/ScreenView";
+import { useFloatingWindow } from "../floating/useFloatingWindow";
 import { Stage } from "../components/Stage";
 import { ALL_DEVICES, useMedia, type Device, type DeviceState } from "../media/useMedia";
 import { useNotes } from "../notes/useNotes";
@@ -54,6 +57,7 @@ export function Room() {
   const [activeConnection, setActiveConnection] = useState<RoomConnection | null>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const notes = useNotes();
+  const floating = useFloatingWindow();
   const addNote = useRef(notes.add);
   addNote.current = notes.add;
   const moveNote = useRef(notes.move);
@@ -99,6 +103,13 @@ export function Room() {
   const handleSignal = useRef(media.handleSignal);
   handleSignal.current = media.handleSignal;
   const onAudioBlocked = useCallback(() => setAudioBlocked(true), []);
+
+  // Parou de compartilhar: a janela flutuante não tem mais o que mostrar.
+  const sharing = media.local.screen;
+  const closeFloating = floating.close;
+  useEffect(() => {
+    if (!sharing && floating.win) closeFloating();
+  }, [sharing, floating.win, closeFloating]);
 
   // Limpa o estado da navegação para não repetir o aviso ao recarregar.
   useEffect(() => {
@@ -344,6 +355,14 @@ export function Room() {
                 <DeviceButton key={d} device={d} state={media.state[d]} onClick={() => media.toggle(d)} />
               ))}
               <QualityPicker value={media.screenQuality} onChange={(q) => void media.setScreenQuality(q)} />
+              {media.state.screen === "on" && (
+                <FloatingButton
+                  supported={floating.supported}
+                  open={!!floating.win}
+                  onOpen={() => void floating.open()}
+                  onClose={floating.close}
+                />
+              )}
             </div>
           )}
 
@@ -410,6 +429,22 @@ export function Room() {
         ([peerId, m]) => m.audio && <RemoteAudio key={peerId} stream={m.audio} onBlocked={onAudioBlocked} />,
       )}
 
+      {/* Janela flutuante de quem transmite: miniatura da própria tela com os recados. */}
+      {floating.win &&
+        inRoom &&
+        media.local.screen &&
+        createPortal(
+          <div className="floating-root">
+            <ScreenView
+              floating
+              stream={media.local.screen}
+              label="Sua tela"
+              notes={notes.notes.filter((n) => n.screenOf === inRoom.selfId)}
+            />
+          </div>,
+          floating.win.document.body,
+        )}
+
       {copyState === "copied" && (
         <div className="toast" role="status">
           Link copiado!
@@ -440,6 +475,31 @@ function DeviceButton({ device, state, onClick }: { device: Device; state: Devic
       <span aria-hidden>
         {on ? BUTTON_TEXT[device].on : state === "starting" ? (device === "screen" ? "Escolhendo…" : "Ligando…") : BUTTON_TEXT[device].off}
       </span>
+    </button>
+  );
+}
+
+function FloatingButton({ supported, open, onOpen, onClose }: { supported: boolean; open: boolean; onOpen(): void; onClose(): void }) {
+  if (!supported) {
+    return (
+      <span className="floating-unsupported">
+        <button className="btn btn-control" disabled aria-describedby="floating-why">
+          Abrir janela flutuante
+        </button>
+        <span id="floating-why" className="muted">
+          Janela flutuante só no Chrome ou Edge (versão 116 ou mais nova) no computador.
+        </span>
+      </span>
+    );
+  }
+  return (
+    <button
+      className={`btn btn-control ${open ? "is-on" : ""}`}
+      aria-pressed={open}
+      onClick={open ? onClose : onOpen}
+      title="Uma janela sempre por cima dos outros apps, para ver os recados enquanto joga"
+    >
+      {open ? "Fechar janela flutuante" : "Abrir janela flutuante"}
     </button>
   );
 }

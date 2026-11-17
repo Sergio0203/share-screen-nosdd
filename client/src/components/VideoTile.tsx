@@ -17,7 +17,7 @@ export function VideoTile({ stream, name, self = false, label, caption, mirrored
     const el = ref.current;
     if (!el) return;
     el.srcObject = stream;
-    el.play().catch(() => {});
+    el.play()?.catch(() => {}); // navegadores antigos devolvem undefined
   }, [stream]);
   return (
     <figure className="tile" aria-label={label ?? (self ? "Sua câmera" : `Câmera de ${name}`)}>

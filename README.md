@@ -39,3 +39,7 @@ npm start          # serve o build + API em http://localhost:3000 (PORT=xxxx par
 > **Jogos:** ao compartilhar só a janela de um jogo em *tela cheia exclusiva*, o
 > vídeo pode sair preto (limitação do sistema/navegador). Use o modo **janela sem
 > bordas** no jogo, ou compartilhe a tela inteira.
+
+> **Janela flutuante** (para quem transmite ver os recados enquanto joga): usa a
+> Document Picture-in-Picture API, disponível só no **Chrome e Edge 116+** no
+> computador. Em outros navegadores o botão aparece desabilitado com explicação.

@@ -13,6 +13,11 @@ interface Props {
   onWrite?(x: number, y: number, text: string): void;
   /** Cursor sobre a imagem (0–1) — usado para o próprio recado acompanhar o cursor. */
   onCursor?(x: number, y: number): void;
+  /**
+   * Na janela flutuante de quem transmite: só mostra a tela e os recados (sem
+   * escrever, sem tela cheia). Pode estar em outro documento (outra janela).
+   */
+  floating?: boolean;
 }
 
 const DEFAULT_ASPECT = 16 / 9;
@@ -26,7 +31,7 @@ const DEFAULT_ASPECT = 16 / 9;
  * Recados ficam numa camada alinhada à imagem (descontando faixas pretas, que
  * aparecem em tela cheia), em posição relativa — o mesmo ponto para todos.
  */
-export function ScreenView({ stream, label, notes = [], onWrite, onCursor }: Props) {
+export function ScreenView({ stream, label, notes = [], onWrite, onCursor, floating = false }: Props) {
   const figure = useRef<HTMLElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
@@ -56,7 +61,7 @@ export function ScreenView({ stream, label, notes = [], onWrite, onCursor }: Pro
     const el = video.current;
     if (!el) return;
     el.srcObject = stream;
-    el.play().catch(() => {});
+    el.play()?.catch(() => {}); // navegadores antigos devolvem undefined
     // A proporção vem da própria imagem (e muda se a janela compartilhada mudar).
     const update = () => {
       if (el.videoWidth && el.videoHeight) setAspect(el.videoWidth / el.videoHeight);
@@ -74,13 +79,18 @@ export function ScreenView({ stream, label, notes = [], onWrite, onCursor }: Pro
   // Reposiciona a camada de recados quando a figura muda de tamanho.
   useEffect(() => {
     const fig = figure.current;
-    if (!fig || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(measure);
+    // Na janela flutuante a figura vive noutro documento: usa o ResizeObserver
+    // da janela dela.
+    const RO = (fig?.ownerDocument.defaultView as (Window & typeof globalThis) | null)?.ResizeObserver;
+    if (!fig || !RO) return;
+    const ro = new RO(measure);
     ro.observe(fig);
     return () => ro.disconnect();
   }, [measure]);
 
   useEffect(() => {
+    // Na janela flutuante só se lê: sem "/" e sem tela cheia.
+    if (floating) return;
     const onChange = () => {
       setFullscreen(document.fullscreenElement === figure.current);
       measure();
@@ -106,7 +116,7 @@ export function ScreenView({ stream, label, notes = [], onWrite, onCursor }: Pro
       document.removeEventListener("fullscreenchange", onChange);
       document.removeEventListener("keydown", onKey);
     };
-  }, [measure]);
+  }, [measure, floating]);
 
   function trackPointer(e: React.PointerEvent) {
     if (!video.current) return;
@@ -133,7 +143,7 @@ export function ScreenView({ stream, label, notes = [], onWrite, onCursor }: Pro
       >
         <video ref={video} autoPlay playsInline muted onDoubleClick={toggleFullscreen} />
         <figcaption className="tile-name">{label}</figcaption>
-        {onWrite && !composer && (
+        {onWrite && !floating && !composer && (
           <span className="screen-hint" aria-hidden>
             Aperte <kbd>/</kbd> para escrever aqui
           </span>
@@ -160,7 +170,7 @@ export function ScreenView({ stream, label, notes = [], onWrite, onCursor }: Pro
                 <span className="note-text">{n.text}</span>
               </div>
             ))}
-            {composer && onWrite && (
+            {composer && onWrite && !floating && (
               <NoteComposer
                 x={composer.x}
                 y={composer.y}
@@ -174,9 +184,11 @@ export function ScreenView({ stream, label, notes = [], onWrite, onCursor }: Pro
           </div>
         )}
 
-        <button className="btn screen-fullscreen" onClick={toggleFullscreen}>
-          {fullscreen ? "Sair da tela cheia" : "Tela cheia"}
-        </button>
+        {!floating && (
+          <button className="btn screen-fullscreen" onClick={toggleFullscreen}>
+            {fullscreen ? "Sair da tela cheia" : "Tela cheia"}
+          </button>
+        )}
       </figure>
     </div>
   );

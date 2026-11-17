@@ -7,7 +7,7 @@ export function RemoteAudio({ stream, onBlocked }: { stream: MediaStream; onBloc
     const el = ref.current;
     if (!el) return;
     el.srcObject = stream;
-    el.play().catch((err: unknown) => {
+    el.play()?.catch((err: unknown) => {
       // Política de autoplay: precisa de um clique na página antes.
       if (err instanceof DOMException && err.name === "NotAllowedError") onBlocked();
     });
@@ -18,6 +18,6 @@ export function RemoteAudio({ stream, onBlocked }: { stream: MediaStream; onBloc
 /** Tenta tocar de novo todos os áudios (chamado num clique do usuário). */
 export function unlockRemoteAudio() {
   document.querySelectorAll<HTMLAudioElement>("audio[data-remote-audio]").forEach((el) => {
-    el.play().catch(() => {});
+    el.play()?.catch(() => {});
   });
 }

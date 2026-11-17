@@ -1181,3 +1181,99 @@ describe("O recado segue o cursor e some sozinho", () => {
     expect(cursors().at(-1)).toEqual({ type: "cursor", screenOf: "bia", x: 0.6, y: 0.5 });
   });
 });
+
+describe("Janela flutuante para quem transmite", () => {
+  const ana = { id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false };
+
+  beforeEach(() => {
+    mockClipboard({});
+    HTMLMediaElement.prototype.play = vi.fn(async () => {});
+  });
+  afterEach(() => {
+    delete (window as { documentPictureInPicture?: unknown }).documentPictureInPicture;
+    document.querySelectorAll("iframe").forEach((f) => f.remove());
+  });
+
+  /** Simula a janela flutuante com um iframe (outro documento, como a real). */
+  function mockPictureInPicture() {
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const pipWindow = frame.contentWindow!;
+    const close = vi.fn(() => pipWindow.dispatchEvent(new Event("pagehide")));
+    Object.defineProperty(pipWindow, "close", { value: close, configurable: true });
+    const requestWindow = vi.fn(async () => pipWindow);
+    (window as { documentPictureInPicture?: unknown }).documentPictureInPicture = { requestWindow, window: null };
+    return { pipWindow, requestWindow, close, doc: () => pipWindow.document };
+  }
+
+  async function sharing() {
+    mockGetDisplayMedia(async () => new FakeMediaStream([fakeMicTrack()]));
+    renderAt(`/sala/${ROOM_ID}`);
+    await enterAs("Ana");
+    const ws = lastSocket();
+    ws.serverSends({ type: "joined", selfId: "me", participants: [ana] });
+    await screen.findByText("Você está na sala.");
+    expect(screen.queryByRole("button", { name: /janela flutuante/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    await screen.findByRole("button", { name: "Parar compartilhamento" });
+    return ws;
+  }
+
+  it("durante o compartilhamento, abre a janela com a própria tela e os recados por cima, só para ler", async () => {
+    const pip = mockPictureInPicture();
+    const css = document.createElement("style");
+    css.textContent = ".note { color: black }";
+    document.head.appendChild(css);
+    const ws = await sharing();
+    await userEvent.click(screen.getByRole("button", { name: "Abrir janela flutuante" }));
+    expect(pip.requestWindow).toHaveBeenCalled();
+    const inPip = within(pip.doc().body);
+    const view = await inPip.findByRole("figure", { name: "Sua tela" });
+    // Estilos da página copiados para a janela (ela nasce em branco).
+    expect([...pip.doc().head.querySelectorAll("style")].map((s) => s.textContent)).toContain(".note { color: black }");
+    css.remove();
+    // Só leitura: sem tela cheia nem dica de escrever.
+    expect(inPip.queryByRole("button", { name: "Tela cheia" })).not.toBeInTheDocument();
+    expect(view.querySelector(".screen-hint")).toBeNull();
+
+    ws.serverSends({ type: "note", note: { id: "n1", authorId: "bia", authorName: "Bia", screenOf: "me", x: 0.3, y: 0.4, text: "atrás de você" } });
+    const note = await inPip.findByRole("note", { name: "Recado de Bia" });
+    expect(note).toHaveTextContent("atrás de você");
+    expect(note.style.left).toBe("30%");
+    // Mesmo comportamento: segue o cursor de quem escreveu.
+    ws.serverSends({ type: "noteMove", authorId: "bia", screenOf: "me", x: 0.6, y: 0.5 });
+    expect(note.style.left).toBe("60%");
+
+    // "/" na janela flutuante não abre nada.
+    fireEvent.keyDown(pip.doc().body, { key: "/" });
+    expect(inPip.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("fechar a janela não para o compartilhamento; parar o compartilhamento fecha a janela", async () => {
+    const pip = mockPictureInPicture();
+    const ws = await sharing();
+    await userEvent.click(screen.getByRole("button", { name: "Abrir janela flutuante" }));
+    await within(pip.doc().body).findByRole("figure", { name: "Sua tela" });
+
+    // A pessoa fecha a janela flutuante (pelo X dela).
+    act(() => {
+      pip.pipWindow.dispatchEvent(new Event("pagehide"));
+    });
+    expect(screen.getByRole("button", { name: "Abrir janela flutuante" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Parar compartilhamento" })).toBeInTheDocument();
+    expect(ws.sent.filter((m) => (m as { type: string }).type === "screen").at(-1)).toEqual({ type: "screen", on: true });
+
+    // Reabre e depois para o compartilhamento: a janela fecha junto.
+    await userEvent.click(screen.getByRole("button", { name: "Abrir janela flutuante" }));
+    await userEvent.click(screen.getByRole("button", { name: "Parar compartilhamento" }));
+    expect(pip.close).toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /janela flutuante/ })).not.toBeInTheDocument();
+  });
+
+  it("navegador sem suporte: botão desabilitado com explicação", async () => {
+    await sharing();
+    const button = screen.getByRole("button", { name: "Abrir janela flutuante" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(/só no Chrome ou Edge/);
+  });
+});

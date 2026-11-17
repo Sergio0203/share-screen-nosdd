@@ -246,3 +246,18 @@ kbd { padding: 0 0.3em; border: 1px solid var(--border); border-radius: 4px; fon
   opacity: 0; transition: opacity 0.2s;
 }
 .screen-view:hover .screen-hint { opacity: 1; }
+
+/* ---------- Janela flutuante (Document Picture-in-Picture) ---------- */
+
+.floating-body { margin: 0; height: 100vh; overflow: hidden; background: #000; }
+/* A tela ocupa a janela inteira, na proporção da imagem; acompanha o redimensionamento. */
+.floating-root { height: 100vh; display: flex; }
+.floating-root .spotlight-area {
+  flex: 1; min-height: 0; container-type: size;
+  display: flex; align-items: center; justify-content: center;
+}
+.floating-root .screen-view { border: none; border-radius: 0; }
+.floating-root .tile-name { font-size: 0.75rem; padding: 0.1rem 0.4rem; }
+.floating-root .note { font-size: 0.85rem; }
+
+.floating-unsupported { display: inline-flex; align-items: center; gap: 0.5rem; max-width: 360px; font-size: 0.85rem; }
