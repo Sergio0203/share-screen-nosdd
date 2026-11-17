@@ -14,7 +14,13 @@ async function layout(page: Page) {
       const r = document.querySelector(sel)!.getBoundingClientRect();
       return { x: r.x, y: r.y, width: r.width, height: r.height };
     };
-    return { body: box(".room-body"), screen: box(".screen-view"), controls: box(".controls"), header: box(".room-header") };
+    return {
+      body: box(".room-body"),
+      screen: box(".screen-view"),
+      controls: box(".controls"),
+      header: box(".room-header"),
+      participants: box(".participants"),
+    };
   });
 }
 
@@ -61,6 +67,7 @@ for (const size of [{ width: 1366, height: 768 }, { width: 1024, height: 640 }])
     expect(cards[1].y).toBeGreaterThan(cards[0].y);
     const keep: Box[] = [
       before.controls,
+      before.participants, // a lista de participantes fica sempre à vista
       (await ana.getByRole("button", { name: "Copiar link" }).boundingBox())!,
       (await ana.getByLabel("Link da sala").boundingBox())!,
     ];
