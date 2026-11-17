@@ -275,6 +275,7 @@ export function useMedia({ connection, selfId, participants }: Options) {
     setScreenQuality,
     screenCapture,
     qualityError,
+    dismissQualityError: () => setQualityError(false),
     state,
     errors,
     dismissError: (device: Device) => setError(device, null),

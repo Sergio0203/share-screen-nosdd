@@ -1277,3 +1277,54 @@ describe("Janela flutuante para quem transmite", () => {
     expect(button).toHaveAccessibleDescription(/só no Chrome ou Edge/);
   });
 });
+
+describe("Avisos como notificações flutuantes", () => {
+  const ana = { id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false };
+  beforeEach(() => mockClipboard({}));
+
+  async function inRoomDenied() {
+    const denied = async () => {
+      throw new DOMException("Permission denied", "NotAllowedError");
+    };
+    const getUserMedia = vi.fn(denied);
+    const getDisplayMedia = vi.fn(denied);
+    Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia, getDisplayMedia }, configurable: true });
+    renderAt(`/sala/${ROOM_ID}`);
+    await enterAs("Ana");
+    lastSocket().serverSends({ type: "joined", selfId: "me", participants: [ana] });
+    await screen.findByText("Você está na sala.");
+  }
+  const toasts = () => within(screen.getByRole("region", { name: "Avisos" }));
+
+  it("avisos de tipos diferentes ficam empilhados na área de avisos, cada um com fechar", async () => {
+    await inRoomDenied();
+    await userEvent.click(screen.getByRole("button", { name: "Ligar microfone" }));
+    await userEvent.click(screen.getByRole("button", { name: "Compartilhar tela" }));
+    const alerts = await toasts().findAllByRole("alert");
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toHaveTextContent("O navegador bloqueou o microfone.");
+    expect(alerts[1]).toHaveTextContent("A tela não foi compartilhada.");
+    // Os avisos não ficam no meio da sala.
+    expect(screen.getByRole("main").contains(alerts[0])).toBe(false);
+
+    await userEvent.click(within(alerts[0]).getByRole("button", { name: "Fechar aviso" }));
+    expect(toasts().getAllByRole("alert")).toHaveLength(1);
+    expect(toasts().getByRole("alert")).toHaveTextContent("A tela não foi compartilhada.");
+  });
+
+  it("o mesmo tipo de aviso não se repete: substitui o anterior", async () => {
+    await inRoomDenied();
+    for (let i = 0; i < 3; i++) await userEvent.click(screen.getByRole("button", { name: "Ligar microfone" }));
+    expect(toasts().getAllByRole("alert")).toHaveLength(1);
+  });
+
+  it("o aviso de cópia bloqueada também vira notificação, com fechar", async () => {
+    mockClipboard({ write: vi.fn().mockRejectedValue(new DOMException("x", "NotAllowedError")), writeText: vi.fn().mockRejectedValue(new Error("x")) });
+    renderAt("/");
+    await userEvent.click(screen.getByRole("button", { name: "Criar sala" }));
+    const status = await toasts().findByRole("status");
+    expect(status).toHaveTextContent("não deixou copiar o link automaticamente");
+    await userEvent.click(within(status).getByRole("button", { name: "Fechar aviso" }));
+    expect(toasts().queryByRole("status")).not.toBeInTheDocument();
+  });
+});

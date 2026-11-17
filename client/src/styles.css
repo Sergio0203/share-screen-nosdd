@@ -78,11 +78,24 @@ kbd { padding: 0 0.3em; border: 1px solid var(--border); border-radius: 4px; fon
   font: inherit; font-family: ui-monospace, monospace; font-size: 0.9rem;
 }
 
-.notice {
-  flex-shrink: 0; margin: 0.75rem 1rem 0; padding: 0.75rem 1rem; border-radius: 8px;
-  background: var(--warn-bg); border: 1px solid var(--warn-border);
+/* Avisos: pilha flutuante no canto superior direito, abaixo do cabeçalho.
+   Fica por cima da sala (não empurra nada) e longe dos controles de baixo. */
+.toasts {
+  position: fixed; top: 4.5rem; right: 1rem; z-index: 20;
+  width: min(380px, calc(100vw - 2rem)); max-height: calc(100dvh - 11rem); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 0.5rem;
+  pointer-events: none; /* só os cartões recebem clique */
 }
-.notice-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.toast-card {
+  pointer-events: auto; display: flex; align-items: flex-start; gap: 0.75rem;
+  padding: 0.75rem 0.75rem 0.75rem 1rem; border-radius: 10px; font-size: 0.9rem; line-height: 1.4;
+  background: var(--warn-bg); border: 1px solid var(--warn-border);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.5);
+  animation: toast-in 0.18s ease-out;
+}
+.toast-body { flex: 1; min-width: 0; }
+.toast-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+@keyframes toast-in { from { opacity: 0; transform: translateX(12px); } }
 
 .room-body { flex: 1; min-height: 0; display: flex; }
 

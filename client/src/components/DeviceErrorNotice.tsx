@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Toast } from "./Toast";
 import type { Device, DeviceError } from "../media/useMedia";
 
 type Msg = { title: string; body: ReactNode };
@@ -97,13 +98,8 @@ export function DeviceErrorNotice({ device, error, onDismiss }: { device: Device
         ? "Você continua na sala, vendo e ouvindo os outros."
         : "Você continua na sala e pode assistir normalmente.";
   return (
-    <div className="notice notice-row" role="alert">
-      <div>
-        <strong>{msg.title}</strong> {msg.body} {stillWorks}
-      </div>
-      <button className="btn btn-small" onClick={onDismiss} aria-label="Fechar aviso">
-        ✕
-      </button>
-    </div>
+    <Toast onClose={onDismiss}>
+      <strong>{msg.title}</strong> {msg.body} {stillWorks}
+    </Toast>
   );
 }

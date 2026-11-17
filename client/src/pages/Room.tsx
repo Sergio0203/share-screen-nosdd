@@ -5,6 +5,7 @@ import { MAX_NAME_LENGTH, MAX_PARTICIPANTS, normalizeName, type Participant } fr
 import { getRoom, roomUrl } from "../api";
 import { copyText } from "../clipboard";
 import { DeviceErrorNotice } from "../components/DeviceErrorNotice";
+import { Toast, ToastStack } from "../components/Toast";
 import { CamIcon, CamOffIcon, MicIcon, MicOffIcon, ScreenIcon } from "../components/icons";
 import { RemoteAudio, unlockRemoteAudio } from "../components/RemoteAudio";
 import { QualityPicker } from "../components/QualityPicker";
@@ -265,42 +266,50 @@ export function Room() {
         </div>
       </header>
 
-      {copyState === "auto_blocked" && (
-        <p className="notice" role="status">
-          O navegador não deixou copiar o link automaticamente. Use o botão <strong>Copiar link</strong> acima
-          para mandar para a galera.
-        </p>
-      )}
-      {ALL_DEVICES.map(
-        (d) =>
-          media.errors[d] && (
-            <DeviceErrorNotice key={d} device={d} error={media.errors[d]} onDismiss={() => media.dismissError(d)} />
-          ),
-      )}
-      {media.qualityError && (
-        <div className="notice" role="alert">
-          Não deu para mudar a qualidade agora. O compartilhamento continua na qualidade anterior.
-        </div>
-      )}
-      {audioBlocked && (
-        <div className="notice notice-row" role="alert">
-          <div>O navegador pausou o som dos outros participantes.</div>
-          <button
-            className="btn btn-primary btn-small"
-            onClick={() => {
-              unlockRemoteAudio();
-              setAudioBlocked(false);
-            }}
+      {/* Avisos por cima da sala (não mudam o layout). Uma vaga por tipo. */}
+      <ToastStack>
+        {copyState === "auto_blocked" && (
+          <Toast key="copy" role="status" onClose={() => setCopyState("idle")}>
+            O navegador não deixou copiar o link automaticamente. Use o botão <strong>Copiar link</strong> acima
+            para mandar para a galera.
+          </Toast>
+        )}
+        {copyState === "manual_failed" && (
+          <Toast key="copy" onClose={() => setCopyState("idle")}>
+            Não deu para copiar. O link está selecionado — use <kbd>Ctrl</kbd>+<kbd>C</kbd>.
+          </Toast>
+        )}
+        {ALL_DEVICES.map(
+          (d) =>
+            media.errors[d] && (
+              <DeviceErrorNotice key={d} device={d} error={media.errors[d]} onDismiss={() => media.dismissError(d)} />
+            ),
+        )}
+        {media.qualityError && (
+          <Toast key="quality" onClose={media.dismissQualityError}>
+            Não deu para mudar a qualidade agora. O compartilhamento continua na qualidade anterior.
+          </Toast>
+        )}
+        {audioBlocked && (
+          <Toast
+            key="audio"
+            onClose={() => setAudioBlocked(false)}
+            action={
+              <button
+                className="btn btn-primary btn-small"
+                onClick={() => {
+                  unlockRemoteAudio();
+                  setAudioBlocked(false);
+                }}
+              >
+                Ativar som
+              </button>
+            }
           >
-            Ativar som
-          </button>
-        </div>
-      )}
-      {copyState === "manual_failed" && (
-        <p className="notice" role="alert">
-          Não deu para copiar. O link está selecionado — use <kbd>Ctrl</kbd>+<kbd>C</kbd>.
-        </p>
-      )}
+            O navegador pausou o som dos outros participantes.
+          </Toast>
+        )}
+      </ToastStack>
 
       <div className="room-body">
         <main className="stage">
