@@ -1054,7 +1054,7 @@ describe("Escrever na tela com /", () => {
     expect(layer.style.width).toBe("800px");
     expect(layer.style.height).toBe("450px");
 
-    await act(() => vi.advanceTimersByTimeAsync(10_500));
+    await act(() => vi.advanceTimersByTimeAsync(6_100));
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 
@@ -1070,5 +1070,114 @@ describe("Escrever na tela com /", () => {
     await userEvent.keyboard("/");
     await userEvent.type(composer()!, "minha tela{Enter}");
     expect(ws.sent.at(-1)).toEqual({ type: "note", screenOf: "me", x: 0.9, y: 0.9, text: "minha tela" });
+  });
+});
+
+describe("O recado segue o cursor e some sozinho", () => {
+  const ana = { id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false };
+  const bia = { id: "bia", name: "Bia", micOn: false, camOn: false, screenOn: true };
+  const BOX = { left: 100, top: 50, width: 800, height: 450 };
+
+  beforeEach(() => {
+    mockClipboard({});
+    HTMLMediaElement.prototype.play = vi.fn(async () => {});
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const r = { x: BOX.left, y: BOX.top, ...BOX, right: BOX.left + BOX.width, bottom: BOX.top + BOX.height };
+      return { ...r, toJSON: () => r } as DOMRect;
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "videoWidth", { configurable: true, get: () => 1280 });
+    Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", { configurable: true, get: () => 720 });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (HTMLVideoElement.prototype as { videoWidth?: number }).videoWidth;
+    delete (HTMLVideoElement.prototype as { videoHeight?: number }).videoHeight;
+  });
+
+  async function watchingBia() {
+    mockGetDisplayMedia(async () => new FakeMediaStream([fakeMicTrack()]));
+    renderAt(`/sala/${ROOM_ID}`);
+    await enterAs("Ana");
+    const ws = lastSocket();
+    ws.serverSends({ type: "joined", selfId: "me", participants: [ana, bia] });
+    ws.serverSends({ type: "signal", from: "bia", data: { description: { type: "offer", sdp: "x" } } });
+    await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
+    const pc = FakePeerConnection.instances[0];
+    act(() => pc.ontrack!({ track: { kind: "video" }, transceiver: pc.transceivers[2] }));
+    const view = await screen.findByRole("figure", { name: "Tela de Bia" });
+    return { ws, view };
+  }
+  const noteFrom = (authorId: string, authorName: string, text: string, x = 0.2, y = 0.2, id = text) => ({
+    type: "note" as const,
+    note: { id, authorId, authorName, screenOf: "bia", x, y, text },
+  });
+  const pointAt = (view: HTMLElement, x: number, y: number) =>
+    fireEvent.pointerMove(view, { clientX: BOX.left + x * BOX.width, clientY: BOX.top + y * BOX.height });
+
+  it("fica visível 5 s, depois some com fade de 1 s", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { ws } = await watchingBia();
+    ws.serverSends(noteFrom("bia", "Bia", "oi"));
+    const note = screen.getByRole("note", { name: "Recado de Bia" });
+    await act(() => vi.advanceTimersByTimeAsync(4_900));
+    expect(note).not.toHaveClass("fading");
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    expect(note).toHaveClass("fading"); // CSS: opacity 0 com transição de 1 s
+    expect(note).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("um novo recado da mesma pessoa substitui o anterior (e ganha os 5 s inteiros)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { ws } = await watchingBia();
+    ws.serverSends(noteFrom("bia", "Bia", "primeiro"));
+    await act(() => vi.advanceTimersByTimeAsync(4_000));
+    ws.serverSends(noteFrom("bia", "Bia", "segundo", 0.7, 0.7));
+    const notes = screen.getAllByRole("note");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toHaveTextContent("segundo");
+    // Os cronômetros do primeiro não apagam o segundo.
+    await act(() => vi.advanceTimersByTimeAsync(2_500));
+    expect(screen.getByRole("note")).not.toHaveClass("fading");
+    await act(() => vi.advanceTimersByTimeAsync(4_000));
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("recados de várias pessoas aparecem ao mesmo tempo", async () => {
+    const { ws } = await watchingBia();
+    ws.serverSends(noteFrom("bia", "Bia", "da Bia"));
+    ws.serverSends(noteFrom("caio", "Caio", "do Caio", 0.6, 0.6));
+    ws.serverSends(noteFrom("me", "Ana", "da Ana", 0.4, 0.8));
+    expect(screen.getAllByRole("note")).toHaveLength(3);
+    expect(screen.getByRole("note", { name: "Recado de Caio" })).toHaveTextContent("do Caio");
+  });
+
+  it("o recado de outra pessoa acompanha o cursor dela", async () => {
+    const { ws } = await watchingBia();
+    ws.serverSends(noteFrom("caio", "Caio", "segue", 0.2, 0.2));
+    ws.serverSends({ type: "noteMove", authorId: "caio", screenOf: "bia", x: 0.55, y: 0.45 });
+    const note = screen.getByRole("note", { name: "Recado de Caio" });
+    expect(note.style.left).toBe("55%");
+    expect(note.style.top).toBe("45%");
+  });
+
+  it("o meu recado segue o meu cursor na hora e o movimento vai para os outros, com limite de frequência", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { ws, view } = await watchingBia();
+    // Sem recado meu: mexer o cursor não manda nada.
+    pointAt(view, 0.3, 0.3);
+    expect(ws.sent.some((m) => (m as { type: string }).type === "cursor")).toBe(false);
+
+    ws.serverSends(noteFrom("me", "Ana", "meu", 0.3, 0.3));
+    const before = ws.sent.length;
+    for (let i = 1; i <= 10; i++) pointAt(view, 0.3 + i * 0.03, 0.5); // rajada de movimentos
+    const mine = screen.getByRole("note", { name: "Recado de Ana" });
+    expect(mine.style.left).toBe("60%"); // move na hora, localmente
+    const cursors = () => ws.sent.slice(before).filter((m) => (m as { type: string }).type === "cursor");
+    expect(cursors().length).toBeLessThanOrEqual(2);
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    // A última posição sempre chega.
+    expect(cursors().at(-1)).toEqual({ type: "cursor", screenOf: "bia", x: 0.6, y: 0.5 });
   });
 });

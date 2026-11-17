@@ -317,3 +317,56 @@ describe("recados na tela", () => {
     expect(bia.messages.filter((m) => m.type === "note")).toHaveLength(5);
   });
 });
+
+describe("recado segue o cursor", () => {
+  const isMove = (m: ServerMessage): m is Extract<ServerMessage, { type: "noteMove" }> => m.type === "noteMove";
+
+  async function sharingRoom() {
+    const room = await createRoom();
+    const ana = connect(room);
+    await ana.join("Ana");
+    const anaId = (await ana.waitFor(isJoined)).selfId;
+    const bia = connect(room);
+    await bia.join("Bia");
+    const biaId = (await bia.waitFor(isJoined)).selfId;
+    await ana.waitFor(participantsAre("Ana", "Bia"));
+    ana.ws.send(JSON.stringify({ type: "screen", on: true }));
+    await bia.waitFor(
+      (m): m is Extract<ServerMessage, { type: "participants" }> =>
+        m.type === "participants" && m.participants.some((p) => p.id === anaId && p.screenOn),
+    );
+    return { ana, anaId, bia, biaId };
+  }
+  const cursor = (screenOf: string, x: number, y: number) => JSON.stringify({ type: "cursor", screenOf, x, y });
+
+  it("com recado visível, o cursor de quem escreveu é repassado aos outros (não a quem escreveu)", async () => {
+    const { ana, anaId, bia, biaId } = await sharingRoom();
+    bia.ws.send(JSON.stringify({ type: "note", screenOf: anaId, x: 0.1, y: 0.1, text: "oi" }));
+    await ana.waitFor((m): m is Extract<ServerMessage, { type: "note" }> => m.type === "note");
+    bia.ws.send(cursor(anaId, 0.6, 0.4));
+    expect(await ana.waitFor(isMove)).toEqual({ type: "noteMove", authorId: biaId, screenOf: anaId, x: 0.6, y: 0.4 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(bia.messages.some((m) => m.type === "noteMove")).toBe(false);
+  });
+
+  it("sem recado visível, cursor não é repassado", async () => {
+    const { ana, anaId, bia } = await sharingRoom();
+    bia.ws.send(cursor(anaId, 0.6, 0.4));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(ana.messages.some((m) => m.type === "noteMove")).toBe(false);
+  });
+
+  it("descarta cursor fora da imagem, de outra tela ou em excesso", async () => {
+    const { ana, anaId, bia, biaId } = await sharingRoom();
+    bia.ws.send(JSON.stringify({ type: "note", screenOf: anaId, x: 0.1, y: 0.1, text: "oi" }));
+    await ana.waitFor((m): m is Extract<ServerMessage, { type: "note" }> => m.type === "note");
+    bia.ws.send(cursor(anaId, 1.5, 0.4));
+    bia.ws.send(cursor(biaId, 0.5, 0.5));
+    for (let i = 0; i < 20; i++) bia.ws.send(cursor(anaId, i / 20, 0.5)); // rajada sem intervalo
+    await new Promise((r) => setTimeout(r, 150));
+    const moves = ana.messages.filter((m) => m.type === "noteMove");
+    expect(moves.length).toBeGreaterThanOrEqual(1);
+    expect(moves.length).toBeLessThan(5);
+    expect(moves.every((m) => m.type === "noteMove" && m.x <= 1 && m.screenOf === anaId)).toBe(true);
+  });
+});

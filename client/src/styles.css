@@ -222,7 +222,10 @@ kbd { padding: 0 0.3em; border: 1px solid var(--border); border-radius: 4px; fon
   background: rgb(255 214 10 / 0.95); color: #1b1600; font-size: 0.95rem; line-height: 1.3;
   box-shadow: 0 4px 14px rgb(0 0 0 / 0.45); overflow-wrap: anywhere; white-space: pre-wrap;
   animation: note-in 0.15s ease-out;
+  /* Acompanha o cursor suavemente; some com fade de 1 s. */
+  transition: left 80ms linear, top 80ms linear, opacity 1s linear;
 }
+.note.fading { opacity: 0; }
 .note-author { display: block; font-size: 0.75rem; font-weight: 700; opacity: 0.75; }
 @keyframes note-in { from { opacity: 0; scale: 0.9; } }
 

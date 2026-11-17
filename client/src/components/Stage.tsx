@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { Note, Participant } from "../../../shared/protocol";
+import type { Participant } from "../../../shared/protocol";
+import type { ShownNote } from "../notes/useNotes";
 import { SCREEN_QUALITIES, type ScreenQuality } from "../media/screenQuality";
 import type { CaptureInfo, RemoteMedia } from "../media/useMedia";
 import { ScreenView } from "./ScreenView";
@@ -14,9 +15,11 @@ interface Props {
   localScreen: MediaStream | null;
   screenQuality: ScreenQuality;
   screenCapture: CaptureInfo | null;
-  notes: Note[];
+  notes: ShownNote[];
   /** Escreve um recado na tela de `screenOf`, na posição relativa (x, y). */
   onWriteNote(screenOf: string, x: number, y: number, text: string): void;
+  /** Move o próprio recado (visível) na tela de `screenOf` para (x, y). */
+  onMoveNote(screenOf: string, x: number, y: number): void;
 }
 
 interface SharedScreen {
@@ -43,6 +46,7 @@ export function Stage({
   screenCapture,
   notes,
   onWriteNote,
+  onMoveNote,
 }: Props) {
   const [chosen, setChosen] = useState<string | null>(null);
 
@@ -94,6 +98,12 @@ export function Stage({
         label={spotlight.label}
         notes={notes.filter((n) => n.screenOf === spotlight.id)}
         onWrite={(x, y, text) => onWriteNote(spotlight.id, x, y, text)}
+        // Enquanto o meu recado nesta tela está visível, ele segue o meu cursor.
+        onCursor={
+          notes.some((n) => n.authorId === selfId && n.screenOf === spotlight.id)
+            ? (x, y) => onMoveNote(spotlight.id, x, y)
+            : undefined
+        }
       />
 
       {screens.length > 1 && (

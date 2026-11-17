@@ -3,6 +3,10 @@
 export const MAX_PARTICIPANTS = 6;
 export const MAX_NAME_LENGTH = 30;
 export const MAX_NOTE_LENGTH = 100;
+/** Recado fica visível por 5 s e depois some com um fade de 1 s. */
+export const NOTE_VISIBLE_MS = 5000;
+export const NOTE_FADE_MS = 1000;
+export const NOTE_LIFETIME_MS = NOTE_VISIBLE_MS + NOTE_FADE_MS;
 
 export interface Participant {
   id: string;
@@ -44,7 +48,9 @@ export type ClientMessage =
   | { type: "cam"; on: boolean }
   | { type: "screen"; on: boolean }
   | { type: "signal"; to: string; data: SignalData }
-  | { type: "note"; screenOf: string; x: number; y: number; text: string };
+  | { type: "note"; screenOf: string; x: number; y: number; text: string }
+  /** Cursor de quem escreveu, enquanto o recado dele está visível. */
+  | { type: "cursor"; screenOf: string; x: number; y: number };
 
 export type ErrorCode = "room_not_found" | "room_full" | "invalid_name" | "bad_message";
 
@@ -53,6 +59,8 @@ export type ServerMessage =
   | { type: "participants"; participants: Participant[] }
   | { type: "signal"; from: string; data: SignalData }
   | { type: "note"; note: Note }
+  /** O recado de `authorId` acompanhou o cursor até (x, y). */
+  | { type: "noteMove"; authorId: string; screenOf: string; x: number; y: number }
   | { type: "error"; code: ErrorCode };
 
 /** Normaliza o nome: tira espaços extras. Retorna null se inválido. */

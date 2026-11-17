@@ -56,6 +56,27 @@ export function Room() {
   const notes = useNotes();
   const addNote = useRef(notes.add);
   addNote.current = notes.add;
+  const moveNote = useRef(notes.move);
+  moveNote.current = notes.move;
+  const cursorThrottle = useRef<{ last: number; timer: ReturnType<typeof setTimeout> | null }>({ last: 0, timer: null });
+
+  /**
+   * Meu recado segue meu cursor: move na hora aqui e manda para os outros no
+   * máximo a cada 50 ms (sempre mandando a última posição no fim).
+   */
+  function moveMyNote(selfId: string, screenOf: string, x: number, y: number) {
+    notes.move(selfId, screenOf, x, y);
+    const t = cursorThrottle.current;
+    if (t.timer) clearTimeout(t.timer);
+    const sendNow = () => {
+      t.last = Date.now();
+      t.timer = null;
+      activeConnection?.send({ type: "cursor", screenOf, x, y });
+    };
+    const wait = 50 - (Date.now() - t.last);
+    if (wait <= 0) sendNow();
+    else t.timer = setTimeout(sendNow, wait);
+  }
 
   // Lido uma única vez: resultado da cópia automática feita ao criar a sala.
   const [copyState, setCopyState] = useState<CopyState>(() => {
@@ -123,6 +144,9 @@ export function Room() {
         break;
       case "note":
         addNote.current(e.note);
+        break;
+      case "noteMove":
+        moveNote.current(e.authorId, e.screenOf, e.x, e.y);
         break;
       case "error":
         connection.current = null;
@@ -311,6 +335,7 @@ export function Room() {
               screenCapture={media.screenCapture}
               notes={notes.notes}
               onWriteNote={(screenOf, x, y, text) => activeConnection?.send({ type: "note", screenOf, x, y, text })}
+              onMoveNote={(screenOf, x, y) => moveMyNote(inRoom.selfId, screenOf, x, y)}
             />
           )}
           {inRoom && (

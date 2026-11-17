@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Note } from "../../../shared/protocol";
+import type { ShownNote } from "../notes/useNotes";
 import { displayedImage, isTyping, toImagePoint, type Box } from "../notes/imageBox";
 import { NoteComposer, noteAnchor } from "../notes/NoteComposer";
 
@@ -8,9 +8,11 @@ interface Props {
   /** Rótulo acessível e legenda (ex.: "Tela de Ana", "Sua tela"). */
   label: string;
   /** Recados escritos nesta tela. */
-  notes?: Note[];
+  notes?: ShownNote[];
   /** Envia um recado na posição (x, y) relativa à imagem (0–1). */
   onWrite?(x: number, y: number, text: string): void;
+  /** Cursor sobre a imagem (0–1) — usado para o próprio recado acompanhar o cursor. */
+  onCursor?(x: number, y: number): void;
 }
 
 const DEFAULT_ASPECT = 16 / 9;
@@ -24,7 +26,7 @@ const DEFAULT_ASPECT = 16 / 9;
  * Recados ficam numa camada alinhada à imagem (descontando faixas pretas, que
  * aparecem em tela cheia), em posição relativa — o mesmo ponto para todos.
  */
-export function ScreenView({ stream, label, notes = [], onWrite }: Props) {
+export function ScreenView({ stream, label, notes = [], onWrite, onCursor }: Props) {
   const figure = useRef<HTMLElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
@@ -38,6 +40,8 @@ export function ScreenView({ stream, label, notes = [], onWrite }: Props) {
   composerOpen.current = composer !== null;
   const canWrite = useRef(false);
   canWrite.current = !!onWrite;
+  const cursorListener = useRef(onCursor);
+  cursorListener.current = onCursor;
 
   const measure = useCallback(() => {
     const fig = figure.current;
@@ -106,7 +110,9 @@ export function ScreenView({ stream, label, notes = [], onWrite }: Props) {
 
   function trackPointer(e: React.PointerEvent) {
     if (!video.current) return;
-    pointer.current = toImagePoint(displayedImage(video.current), e.clientX, e.clientY);
+    const point = toImagePoint(displayedImage(video.current), e.clientX, e.clientY);
+    pointer.current = point;
+    if (point) cursorListener.current?.(point.x, point.y);
   }
 
   function toggleFullscreen() {
@@ -142,7 +148,7 @@ export function ScreenView({ stream, label, notes = [], onWrite }: Props) {
             {notes.map((n) => (
               <div
                 key={n.id}
-                className={`note ${noteAnchor(n.x, n.y)}`}
+                className={`note ${noteAnchor(n.x, n.y)} ${n.fading ? "fading" : ""}`}
                 role="note"
                 aria-label={`Recado de ${n.authorName}`}
                 data-x={n.x}

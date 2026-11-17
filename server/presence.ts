@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import {
+  NOTE_LIFETIME_MS,
   normalizeName,
   normalizeNote,
   type ClientMessage,
@@ -13,6 +14,8 @@ import type { RoomStore } from "./rooms.js";
 /** Anti-spam: no máximo N recados por pessoa a cada janela de tempo. */
 const NOTE_BURST = 5;
 const NOTE_WINDOW_MS = 5000;
+/** Movimentos de cursor: no máximo um a cada N ms por pessoa (o cliente manda ~20/s). */
+const CURSOR_MIN_INTERVAL_MS = 30;
 
 const inUnitRange = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
 
@@ -54,6 +57,9 @@ export function registerPresence(app: FastifyInstance, store: RoomStore, opts: P
     let participantId: string | null = null;
     let lastSeen = Date.now();
     let recentNotes: number[] = [];
+    /** Recado ativo desta pessoa: só ele acompanha o cursor, e só enquanto visível. */
+    let activeNote: { screenOf: string; until: number } | null = null;
+    let lastCursorAt = 0;
 
     socket.on("pong", () => (lastSeen = Date.now()));
     const heartbeat = setInterval(() => {
@@ -111,7 +117,19 @@ export function registerPresence(app: FastifyInstance, store: RoomStore, opts: P
         if (recentNotes.length >= NOTE_BURST) return;
         recentNotes.push(now);
         const note = { id: randomUUID(), authorId: author.id, authorName: author.name, screenOf: target.id, x: msg.x, y: msg.y, text };
+        activeNote = { screenOf: target.id, until: now + NOTE_LIFETIME_MS };
         for (const s of sockets.get(roomId)?.values() ?? []) send(s, { type: "note", note });
+        return;
+      }
+
+      if (msg.type === "cursor") {
+        const now = Date.now();
+        if (!activeNote || now > activeNote.until || msg.screenOf !== activeNote.screenOf) return;
+        if (!inUnitRange(msg.x) || !inUnitRange(msg.y) || now - lastCursorAt < CURSOR_MIN_INTERVAL_MS) return;
+        lastCursorAt = now;
+        const move = { type: "noteMove" as const, authorId: participantId, screenOf: msg.screenOf, x: msg.x, y: msg.y };
+        // Quem escreveu já moveu o próprio recado localmente.
+        for (const [id, s] of sockets.get(roomId) ?? []) if (id !== participantId) send(s, move);
         return;
       }
 
