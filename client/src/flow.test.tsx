@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { Participant, ServerMessage } from "../../shared/protocol";
@@ -933,5 +933,142 @@ describe("Escolher a qualidade do compartilhamento", () => {
     mockGetDisplayMedia(async () => new FakeMediaStream([fakeScreenTrack()]));
     await inRoom();
     expect(picker()).toHaveValue("1080p30");
+  });
+});
+
+describe("Escrever na tela com /", () => {
+  const ana = { id: "me", name: "Ana", micOn: false, camOn: false, screenOn: false };
+  const bia = { id: "bia", name: "Bia", micOn: false, camOn: false, screenOn: true };
+  // Imagem de 1280×720 mostrada numa caixa de 800×450 em (100, 50).
+  const BOX = { left: 100, top: 50, width: 800, height: 450 };
+
+  beforeEach(() => {
+    mockClipboard({});
+    HTMLMediaElement.prototype.play = vi.fn(async () => {});
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const r = { x: BOX.left, y: BOX.top, ...BOX, right: BOX.left + BOX.width, bottom: BOX.top + BOX.height };
+      return { ...r, toJSON: () => r } as DOMRect;
+    });
+    Object.defineProperty(HTMLVideoElement.prototype, "videoWidth", { configurable: true, get: () => 1280 });
+    Object.defineProperty(HTMLVideoElement.prototype, "videoHeight", { configurable: true, get: () => 720 });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (HTMLVideoElement.prototype as { videoWidth?: number }).videoWidth;
+    delete (HTMLVideoElement.prototype as { videoHeight?: number }).videoHeight;
+  });
+
+  /** Ana na sala vendo a tela da Bia. */
+  async function watchingBia() {
+    mockGetDisplayMedia(async () => new FakeMediaStream([fakeMicTrack()]));
+    renderAt(`/sala/${ROOM_ID}`);
+    await enterAs("Ana");
+    const ws = lastSocket();
+    ws.serverSends({ type: "joined", selfId: "me", participants: [ana, bia] });
+    ws.serverSends({ type: "signal", from: "bia", data: { description: { type: "offer", sdp: "x" } } });
+    await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
+    const pc = FakePeerConnection.instances[0];
+    act(() => pc.ontrack!({ track: { kind: "video" }, transceiver: pc.transceivers[2] }));
+    const view = await screen.findByRole("figure", { name: "Tela de Bia" });
+    return { ws, view };
+  }
+
+  /** Cursor sobre a imagem, em posição relativa (0–1). */
+  function pointAt(view: HTMLElement, x: number, y: number) {
+    fireEvent.pointerMove(view, { clientX: BOX.left + x * BOX.width, clientY: BOX.top + y * BOX.height });
+  }
+  const composer = () => screen.queryByRole("textbox", { name: "Recado na tela" });
+
+  it("com o cursor sobre a tela, / abre o campo na posição do cursor; Enter envia", async () => {
+    const { ws, view } = await watchingBia();
+    pointAt(view, 0.25, 0.75);
+    await userEvent.keyboard("/");
+    const input = composer()!;
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue(""); // a própria "/" não entra no texto
+    const form = input.closest("form")!;
+    expect(form.style.left).toBe("25%");
+    expect(form.style.top).toBe("75%");
+
+    await userEvent.type(input, "olha ali{Enter}");
+    expect(ws.sent.at(-1)).toEqual({ type: "note", screenOf: "bia", x: 0.25, y: 0.75, text: "olha ali" });
+    expect(composer()).not.toBeInTheDocument();
+  });
+
+  it("Esc cancela sem enviar", async () => {
+    const { ws, view } = await watchingBia();
+    pointAt(view, 0.5, 0.5);
+    await userEvent.keyboard("/");
+    await userEvent.type(composer()!, "deixa pra lá{Escape}");
+    expect(composer()).not.toBeInTheDocument();
+    expect(ws.sent.some((m) => (m as { type: string }).type === "note")).toBe(false);
+  });
+
+  it("não abre com o cursor fora da tela", async () => {
+    const { view } = await watchingBia();
+    pointAt(view, 0.5, 0.5);
+    fireEvent.pointerLeave(view);
+    await userEvent.keyboard("/");
+    expect(composer()).not.toBeInTheDocument();
+  });
+
+  it("/ digitado em outro campo não abre nada", async () => {
+    const { view } = await watchingBia();
+    pointAt(view, 0.5, 0.5);
+    const link = screen.getByLabelText("Link da sala");
+    link.focus();
+    await userEvent.keyboard("/");
+    expect(composer()).not.toBeInTheDocument();
+  });
+
+  it("no máximo 100 caracteres, mostrando quantos faltam", async () => {
+    const { ws, view } = await watchingBia();
+    pointAt(view, 0.5, 0.5);
+    await userEvent.keyboard("/");
+    const input = composer()!;
+    expect(screen.getByText("faltam 100 caracteres")).toBeInTheDocument();
+    await userEvent.type(input, "abc");
+    expect(screen.getByText("faltam 97 caracteres")).toBeInTheDocument();
+    await userEvent.clear(input);
+    await userEvent.paste("x".repeat(130));
+    expect(input).toHaveValue("x".repeat(100));
+    expect(screen.getByText("faltam 0 caracteres")).toBeInTheDocument();
+    await userEvent.type(input, "y{Enter}");
+    expect((ws.sent.at(-1) as { text: string }).text).toBe("x".repeat(100));
+  });
+
+  it("recado recebido aparece na tela, no ponto certo, com o nome, como texto puro, e some depois", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { ws } = await watchingBia();
+    ws.serverSends({
+      type: "note",
+      note: { id: "n1", authorId: "bia", authorName: "Bia", screenOf: "bia", x: 0.1, y: 0.2, text: "<b>oi</b>" },
+    });
+    const note = screen.getByRole("note", { name: "Recado de Bia" });
+    expect(note).toHaveTextContent("Bia<b>oi</b>");
+    expect(note.querySelector("b")).toBeNull();
+    expect(note.style.left).toBe("10%");
+    expect(note.style.top).toBe("20%");
+    // A camada de recados fica exatamente sobre a imagem.
+    const layer = screen.getByTestId("notes-layer");
+    expect(layer.style.width).toBe("800px");
+    expect(layer.style.height).toBe("450px");
+
+    await act(() => vi.advanceTimersByTimeAsync(10_500));
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("quem compartilha escreve na própria tela", async () => {
+    mockGetDisplayMedia(async () => new FakeMediaStream([fakeMicTrack()]));
+    renderAt(`/sala/${ROOM_ID}`);
+    await enterAs("Ana");
+    const ws = lastSocket();
+    ws.serverSends({ type: "joined", selfId: "me", participants: [ana] });
+    await userEvent.click(await screen.findByRole("button", { name: "Compartilhar tela" }));
+    const own = await screen.findByRole("figure", { name: "Sua tela" });
+    pointAt(own, 0.9, 0.9);
+    await userEvent.keyboard("/");
+    await userEvent.type(composer()!, "minha tela{Enter}");
+    expect(ws.sent.at(-1)).toEqual({ type: "note", screenOf: "me", x: 0.9, y: 0.9, text: "minha tela" });
   });
 });

@@ -1,12 +1,20 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
+import { randomUUID } from "node:crypto";
 import {
   normalizeName,
+  normalizeNote,
   type ClientMessage,
   type ErrorCode,
   type ServerMessage,
 } from "../shared/protocol.js";
 import type { RoomStore } from "./rooms.js";
+
+/** Anti-spam: no máximo N recados por pessoa a cada janela de tempo. */
+const NOTE_BURST = 5;
+const NOTE_WINDOW_MS = 5000;
+
+const inUnitRange = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
 
 export interface PresenceOptions {
   /** De quanto em quanto tempo o servidor manda ping para cada conexão. */
@@ -45,6 +53,7 @@ export function registerPresence(app: FastifyInstance, store: RoomStore, opts: P
     const roomId = req.params.id;
     let participantId: string | null = null;
     let lastSeen = Date.now();
+    let recentNotes: number[] = [];
 
     socket.on("pong", () => (lastSeen = Date.now()));
     const heartbeat = setInterval(() => {
@@ -88,6 +97,21 @@ export function registerPresence(app: FastifyInstance, store: RoomStore, opts: P
         const field = ({ mic: "micOn", cam: "camOn", screen: "screenOn" } as const)[msg.type];
         store.setDevice(roomId, participantId, field, msg.on === true);
         broadcast(roomId);
+        return;
+      }
+
+      if (msg.type === "note") {
+        const text = normalizeNote(msg.text);
+        const author = store.list(roomId).find((p) => p.id === participantId);
+        const target = store.list(roomId).find((p) => p.id === msg.screenOf);
+        // Só em tela que está sendo compartilhada agora, dentro da imagem.
+        if (!text || !author || !target?.screenOn || !inUnitRange(msg.x) || !inUnitRange(msg.y)) return;
+        const now = Date.now();
+        recentNotes = recentNotes.filter((t) => now - t < NOTE_WINDOW_MS);
+        if (recentNotes.length >= NOTE_BURST) return;
+        recentNotes.push(now);
+        const note = { id: randomUUID(), authorId: author.id, authorName: author.name, screenOf: target.id, x: msg.x, y: msg.y, text };
+        for (const s of sockets.get(roomId)?.values() ?? []) send(s, { type: "note", note });
         return;
       }
 

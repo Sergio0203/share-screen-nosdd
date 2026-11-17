@@ -203,3 +203,43 @@ kbd { padding: 0 0.3em; border: 1px solid var(--border); border-radius: 4px; fon
   .screen-view { width: 100cqw; }
   .participants { width: auto; border-left: none; border-top: 1px solid var(--border); }
 }
+
+/* ---------- Recados na tela ---------- */
+
+/* Camada exatamente sobre a imagem; recados posicionados em % dela. */
+.notes-layer { position: absolute; pointer-events: none; }
+.note, .note-composer {
+  position: absolute; pointer-events: auto;
+  /* O ponto do cursor é o canto do balão; perto das bordas, ele cresce para dentro. */
+  transform: translate(0, 0);
+}
+.note.anchor-right, .note-composer.anchor-right { transform: translateX(-100%); }
+.note.anchor-bottom, .note-composer.anchor-bottom { transform: translateY(-100%); }
+.note.anchor-right.anchor-bottom, .note-composer.anchor-right.anchor-bottom { transform: translate(-100%, -100%); }
+
+.note {
+  max-width: min(320px, 60%); padding: 0.35rem 0.6rem; border-radius: 8px;
+  background: rgb(255 214 10 / 0.95); color: #1b1600; font-size: 0.95rem; line-height: 1.3;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.45); overflow-wrap: anywhere; white-space: pre-wrap;
+  animation: note-in 0.15s ease-out;
+}
+.note-author { display: block; font-size: 0.75rem; font-weight: 700; opacity: 0.75; }
+@keyframes note-in { from { opacity: 0; scale: 0.9; } }
+
+.note-composer {
+  display: flex; flex-direction: column; gap: 0.2rem; width: min(320px, 80%);
+  padding: 0.4rem; border-radius: 8px; background: rgb(15 17 21 / 0.92); border: 1px solid var(--primary);
+}
+.note-composer input {
+  width: 100%; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font: inherit;
+}
+.note-composer input:focus { outline: 2px solid var(--primary); }
+.note-counter { font-size: 0.75rem; color: var(--muted); text-align: right; }
+
+.screen-hint {
+  position: absolute; top: 0.6rem; right: 0.6rem; padding: 0.25rem 0.6rem; border-radius: 6px;
+  background: rgb(0 0 0 / 0.6); color: #fff; font-size: 0.85rem; pointer-events: none;
+  opacity: 0; transition: opacity 0.2s;
+}
+.screen-view:hover .screen-hint { opacity: 1; }

@@ -2,6 +2,7 @@ import {
   roomSocketPath,
   type ClientMessage,
   type ErrorCode,
+  type Note,
   type Participant,
   type ServerMessage,
   type SignalData,
@@ -11,6 +12,7 @@ export type ConnectionEvent =
   | { type: "joined"; selfId: string; participants: Participant[] }
   | { type: "participants"; participants: Participant[] }
   | { type: "signal"; from: string; data: SignalData }
+  | { type: "note"; note: Note }
   | { type: "error"; code: ErrorCode }
   /** Conexão caiu sem que tenhamos pedido para sair. */
   | { type: "disconnected" };

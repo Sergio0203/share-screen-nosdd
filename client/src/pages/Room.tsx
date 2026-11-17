@@ -9,6 +9,7 @@ import { RemoteAudio, unlockRemoteAudio } from "../components/RemoteAudio";
 import { QualityPicker } from "../components/QualityPicker";
 import { Stage } from "../components/Stage";
 import { ALL_DEVICES, useMedia, type Device, type DeviceState } from "../media/useMedia";
+import { useNotes } from "../notes/useNotes";
 import { joinRoom, type ConnectionEvent, type RoomConnection } from "../roomConnection";
 import type { JustCreatedState } from "./Home";
 
@@ -52,6 +53,9 @@ export function Room() {
   /** A mesma conexão, como estado, para os efeitos de mídia reagirem a ela. */
   const [activeConnection, setActiveConnection] = useState<RoomConnection | null>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const notes = useNotes();
+  const addNote = useRef(notes.add);
+  addNote.current = notes.add;
 
   // Lido uma única vez: resultado da cópia automática feita ao criar a sala.
   const [copyState, setCopyState] = useState<CopyState>(() => {
@@ -116,6 +120,9 @@ export function Room() {
         break;
       case "signal":
         handleSignal.current(e.from, e.data);
+        break;
+      case "note":
+        addNote.current(e.note);
         break;
       case "error":
         connection.current = null;
@@ -302,6 +309,8 @@ export function Room() {
               localScreen={media.local.screen}
               screenQuality={media.screenQuality}
               screenCapture={media.screenCapture}
+              notes={notes.notes}
+              onWriteNote={(screenOf, x, y, text) => activeConnection?.send({ type: "note", screenOf, x, y, text })}
             />
           )}
           {inRoom && (

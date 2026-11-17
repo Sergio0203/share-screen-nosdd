@@ -249,3 +249,71 @@ describe("voz: estado do microfone e sinalização", () => {
     expect(bia.messages.some((m) => m.type === "signal")).toBe(false);
   });
 });
+
+describe("recados na tela", () => {
+  const isNote = (m: ServerMessage): m is Extract<ServerMessage, { type: "note" }> => m.type === "note";
+
+  async function sharingRoom() {
+    const room = await createRoom();
+    const ana = connect(room);
+    await ana.join("Ana");
+    const anaId = (await ana.waitFor(isJoined)).selfId;
+    const bia = connect(room);
+    await bia.join("Bia");
+    await bia.waitFor(isJoined);
+    await ana.waitFor(participantsAre("Ana", "Bia"));
+    ana.ws.send(JSON.stringify({ type: "screen", on: true }));
+    await bia.waitFor(
+      (m): m is Extract<ServerMessage, { type: "participants" }> =>
+        m.type === "participants" && m.participants.some((p) => p.id === anaId && p.screenOn),
+    );
+    return { room, ana, anaId, bia };
+  }
+
+  const note = (screenOf: string, text: string, x = 0.25, y = 0.75) => JSON.stringify({ type: "note", screenOf, x, y, text });
+
+  it("chega a todos, inclusive a quem compartilha e a quem escreveu, com o nome do autor", async () => {
+    const { ana, anaId, bia } = await sharingRoom();
+    bia.ws.send(note(anaId, "  olha ali  "));
+    for (const c of [ana, bia]) {
+      const got = (await c.waitFor(isNote)).note;
+      expect(got).toMatchObject({ authorName: "Bia", screenOf: anaId, x: 0.25, y: 0.75, text: "olha ali" });
+    }
+  });
+
+  it("quem compartilha também escreve na própria tela", async () => {
+    const { ana, anaId, bia } = await sharingRoom();
+    ana.ws.send(note(anaId, "minha tela"));
+    expect((await bia.waitFor(isNote)).note).toMatchObject({ authorName: "Ana", text: "minha tela" });
+  });
+
+  it("guarda o texto como veio (sem interpretar HTML) e aceita 100 caracteres", async () => {
+    const { anaId, bia } = await sharingRoom();
+    bia.ws.send(note(anaId, "<b>oi</b>"));
+    expect((await bia.waitFor(isNote)).note.text).toBe("<b>oi</b>");
+    const hundred = "😀".repeat(100);
+    bia.ws.send(note(anaId, hundred));
+    await bia.waitFor((m): m is Extract<ServerMessage, { type: "note" }> => m.type === "note" && m.note.text === hundred);
+  });
+
+  it("descarta recado inválido: vazio, mais de 100 caracteres, fora da imagem ou em tela não compartilhada", async () => {
+    const { anaId, bia } = await sharingRoom();
+    const { selfId: biaId } = (await bia.waitFor(isJoined));
+    bia.ws.send(note(anaId, "   "));
+    bia.ws.send(note(anaId, "x".repeat(101)));
+    bia.ws.send(note(anaId, "fora", 1.2, 0.5));
+    bia.ws.send(JSON.stringify({ type: "note", screenOf: anaId, x: "0.5", y: 0.5, text: "x" }));
+    bia.ws.send(note(biaId, "a Bia não está compartilhando"));
+    bia.ws.send(note(anaId, "válido"));
+    expect((await bia.waitFor(isNote)).note.text).toBe("válido");
+    expect(bia.messages.filter((m) => m.type === "note")).toHaveLength(1);
+  });
+
+  it("limita recados em rajada (anti-spam)", async () => {
+    const { anaId, bia } = await sharingRoom();
+    for (let i = 0; i < 8; i++) bia.ws.send(note(anaId, `n${i}`));
+    await bia.waitFor((m): m is Extract<ServerMessage, { type: "note" }> => m.type === "note" && m.note.text === "n4");
+    await new Promise((r) => setTimeout(r, 150));
+    expect(bia.messages.filter((m) => m.type === "note")).toHaveLength(5);
+  });
+});

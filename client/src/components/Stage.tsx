@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Participant } from "../../../shared/protocol";
+import type { Note, Participant } from "../../../shared/protocol";
 import { SCREEN_QUALITIES, type ScreenQuality } from "../media/screenQuality";
 import type { CaptureInfo, RemoteMedia } from "../media/useMedia";
 import { ScreenView } from "./ScreenView";
@@ -14,6 +14,9 @@ interface Props {
   localScreen: MediaStream | null;
   screenQuality: ScreenQuality;
   screenCapture: CaptureInfo | null;
+  notes: Note[];
+  /** Escreve um recado na tela de `screenOf`, na posição relativa (x, y). */
+  onWriteNote(screenOf: string, x: number, y: number, text: string): void;
 }
 
 interface SharedScreen {
@@ -29,7 +32,18 @@ interface SharedScreen {
  * espaço que sobra, e as câmeras ficam numa faixa abaixo. Sem tela: as câmeras
  * em grade.
  */
-export function Stage({ selfId, selfName, participants, remote, localCamera, localScreen, screenQuality, screenCapture }: Props) {
+export function Stage({
+  selfId,
+  selfName,
+  participants,
+  remote,
+  localCamera,
+  localScreen,
+  screenQuality,
+  screenCapture,
+  notes,
+  onWriteNote,
+}: Props) {
   const [chosen, setChosen] = useState<string | null>(null);
 
   const others = participants.filter((p) => p.id !== selfId);
@@ -74,7 +88,13 @@ export function Stage({ selfId, selfName, participants, remote, localCamera, loc
         </div>
       )}
 
-      <ScreenView key={spotlight.id} stream={spotlight.stream} label={spotlight.label} />
+      <ScreenView
+        key={spotlight.id}
+        stream={spotlight.stream}
+        label={spotlight.label}
+        notes={notes.filter((n) => n.screenOf === spotlight.id)}
+        onWrite={(x, y, text) => onWriteNote(spotlight.id, x, y, text)}
+      />
 
       {screens.length > 1 && (
         <div className="screen-picker" role="group" aria-label="Outras telas compartilhadas">
