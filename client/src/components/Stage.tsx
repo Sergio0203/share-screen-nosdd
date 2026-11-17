@@ -16,39 +16,48 @@ interface Props {
   screenCapture: CaptureInfo | null;
 }
 
+interface SharedScreen {
+  id: string;
+  label: string;
+  /** Texto do botão para trocar o destaque para esta tela. */
+  pick: string;
+  stream: MediaStream;
+}
+
 /**
- * Área central da sala: compartilhamento de tela em destaque (se houver) e,
- * abaixo, as câmeras.
+ * Área central da sala. Com tela compartilhada: a tela em destaque ocupa todo o
+ * espaço que sobra, e as câmeras ficam numa faixa abaixo. Sem tela: as câmeras
+ * em grade.
  */
 export function Stage({ selfId, selfName, participants, remote, localCamera, localScreen, screenQuality, screenCapture }: Props) {
   const [chosen, setChosen] = useState<string | null>(null);
 
   const others = participants.filter((p) => p.id !== selfId);
-  const sharers = others.filter((p) => p.screenOn && remote[p.id]?.screen);
   const cameras = others.filter((p) => p.camOn && remote[p.id]?.camera);
-  // Em destaque: a tela escolhida, ou a primeira disponível.
-  const spotlight = sharers.find((p) => p.id === chosen) ?? sharers[0];
+  const screens: SharedScreen[] = others
+    .filter((p) => p.screenOn && remote[p.id]?.screen)
+    .map((p) => ({ id: p.id, label: `Tela de ${p.name}`, pick: `Ver tela de ${p.name}`, stream: remote[p.id]!.screen! }));
+  // A própria tela também vai para o destaque — por último: se outra pessoa
+  // também estiver compartilhando, mostra a dela primeiro.
+  if (localScreen) screens.push({ id: selfId, label: "Sua tela", pick: "Ver sua tela", stream: localScreen });
+  const spotlight = screens.find((s) => s.id === chosen) ?? screens[0];
 
-  if (!spotlight && !localScreen && !localCamera && cameras.length === 0) {
-    return <p className="muted">Você está na sala.</p>;
+  const cameraTiles = (
+    <>
+      {localCamera && <VideoTile stream={localCamera} name={selfName} self />}
+      {cameras.map((p) => (
+        <VideoTile key={p.id} stream={remote[p.id]!.camera!} name={p.name} />
+      ))}
+    </>
+  );
+
+  if (!spotlight) {
+    if (!localCamera && cameras.length === 0) return <p className="muted stage-empty">Você está na sala.</p>;
+    return <div className="tiles">{cameraTiles}</div>;
   }
 
   return (
-    <div className={`stage-content ${spotlight ? "has-spotlight" : ""}`}>
-      {spotlight && <ScreenView key={spotlight.id} stream={remote[spotlight.id]!.screen!} name={spotlight.name} />}
-
-      {sharers.length > 1 && (
-        <div className="screen-picker" role="group" aria-label="Outras telas compartilhadas">
-          {sharers
-            .filter((p) => p !== spotlight)
-            .map((p) => (
-              <button key={p.id} className="btn btn-small" onClick={() => setChosen(p.id)}>
-                Ver tela de {p.name}
-              </button>
-            ))}
-        </div>
-      )}
-
+    <>
       {localScreen && (
         <div className="sharing-banner" role="status">
           <p>Você está compartilhando a tela.</p>
@@ -65,15 +74,25 @@ export function Stage({ selfId, selfName, participants, remote, localCamera, loc
         </div>
       )}
 
-      <div className={`tiles ${spotlight ? "tiles-small" : ""}`}>
-        {localScreen && (
-          <VideoTile stream={localScreen} name={selfName} label="Sua tela" caption="Sua tela" mirrored={false} />
-        )}
-        {localCamera && <VideoTile stream={localCamera} name={selfName} self />}
-        {cameras.map((p) => (
-          <VideoTile key={p.id} stream={remote[p.id]!.camera!} name={p.name} />
-        ))}
-      </div>
-    </div>
+      <ScreenView key={spotlight.id} stream={spotlight.stream} label={spotlight.label} />
+
+      {screens.length > 1 && (
+        <div className="screen-picker" role="group" aria-label="Outras telas compartilhadas">
+          {screens
+            .filter((s) => s !== spotlight)
+            .map((s) => (
+              <button key={s.id} className="btn btn-small" onClick={() => setChosen(s.id)}>
+                {s.pick}
+              </button>
+            ))}
+        </div>
+      )}
+
+      {(localCamera || cameras.length > 0) && (
+        <div className="camera-strip" role="group" aria-label="Câmeras">
+          {cameraTiles}
+        </div>
+      )}
+    </>
   );
 }

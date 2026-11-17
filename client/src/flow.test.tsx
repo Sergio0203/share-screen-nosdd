@@ -678,8 +678,9 @@ describe("Compartilhar a tela", () => {
     ws.serverSends({ type: "participants", participants: bia(true) });
     const view = screen.getByRole("figure", { name: "Tela de Bia" });
     expect(view).toHaveClass("screen-view");
-    // A câmera dela continua aparecendo, menor.
-    expect(screen.getByRole("figure", { name: "Câmera de Bia" }).parentElement).toHaveClass("tiles-small");
+    // A câmera dela continua aparecendo, numa faixa abaixo do destaque.
+    expect(screen.getByRole("figure", { name: "Câmera de Bia" }).parentElement).toHaveClass("camera-strip");
+    expect(within(view).getByRole("button", { name: "Tela cheia" })).toBeVisible();
     expect(within(screen.getByRole("complementary")).getByRole("img", { name: "compartilhando a tela" })).toBeInTheDocument();
 
     view.requestFullscreen = vi.fn(async () => {});
@@ -688,6 +689,31 @@ describe("Compartilhar a tela", () => {
 
     ws.serverSends({ type: "participants", participants: bia(false) });
     expect(screen.queryByRole("figure", { name: "Tela de Bia" })).not.toBeInTheDocument();
+  });
+
+  it("quem compartilha vê a própria tela em destaque, com tela cheia", async () => {
+    mockGetDisplayMedia(async () => new FakeMediaStream([screenTrack()]));
+    await inRoomWith();
+    await userEvent.click(shareButton());
+    const own = await screen.findByRole("figure", { name: "Sua tela" });
+    expect(own).toHaveClass("screen-view");
+    expect(within(own).getByRole("button", { name: "Tela cheia" })).toBeInTheDocument();
+  });
+
+  it("se outra pessoa também compartilha, a tela dela fica em destaque e dá para ver a sua", async () => {
+    mockGetDisplayMedia(async () => new FakeMediaStream([screenTrack()]));
+    const ws = await inRoomWith({ id: "bia", name: "Bia", micOn: false, camOn: false, screenOn: true });
+    ws.serverSends({ type: "signal", from: "bia", data: { description: { type: "offer", sdp: "x" } } });
+    await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
+    const pc = FakePeerConnection.instances[0];
+    act(() => pc.ontrack!({ track: { kind: "video" }, transceiver: pc.transceivers[2] }));
+    await userEvent.click(shareButton());
+    await screen.findByText("Você está compartilhando a tela.");
+
+    expect(screen.getByRole("figure", { name: "Tela de Bia" })).toHaveClass("screen-view");
+    await userEvent.click(screen.getByRole("button", { name: "Ver sua tela" }));
+    expect(screen.getByRole("figure", { name: "Sua tela" })).toHaveClass("screen-view");
+    expect(screen.getByRole("button", { name: "Ver tela de Bia" })).toBeInTheDocument();
   });
 
   it("com duas telas compartilhadas, dá para escolher qual ver em destaque", async () => {
